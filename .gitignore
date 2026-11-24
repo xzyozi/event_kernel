@@ -1,0 +1,44 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+*.egg
+build/
+.venv/
+venv/
+# Environment variables / secrets
+.env
+.env.*
+*.env
+!.env.example
+!*.env.example
+
+# Ruff / Tools
+.ruff_cache/
+.mypy_cache/
+.pytest_cache/
+.coverage
+.coverage.*
+mutants/
+
+# JavaScript
+node_modules/
+dist/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# OS / Editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+!/.vscode/settings.json
+!/.vscode/launch.json
+
+# agent
+.kiro/*
+
+# tmp_script
+tmp_script/*
