@@ -5,7 +5,7 @@ document_number: "ADR-003"
 document_role: "rationale"
 ssot_scope: "decision_rationale"
 status: "proposed"
-version: "0.3"
+version: "0.4"
 created_at: "2026-11-24"
 updated_at: "2026-11-24"
 author: "xzyozi"
@@ -146,5 +146,14 @@ related_documents:
 
 - [ ] V-01 から V-06 のスパイクを実施し、結果を本ADRへ追記する。
 - [ ] 承認後、ステータスを `accepted` にし、要件定義書の OPEN-02 を解決済みにする。
-- [ ] 環境・開発基盤仕様書へ、`cbindgen` と `maturin` の品質ゲートを追加する。
+- [x] 環境・開発基盤仕様書へ、`cbindgen` と `maturin` の品質ゲートを追加する（EK-ENV-001 の QG-012）。
 - [ ] IF/API仕様書で、`core-capi` の関数と型を定義する。
+
+## 9. 改訂履歴
+
+| 版数 | 改訂日     | 変更者 | 変更内容                                                                                                                                          |
+| :--- | :--------- | :----- | :------------------------------------------------------------------------------------------------------------------------------------------------ |
+| 0.1  | 2026-11-24 | xzyozi | 初版ドラフト。                                                                                                                                    |
+| 0.2  | 2026-11-24 | xzyozi | 入力ビューの寿命、共通ロジックの集約、`Poisoned`、検証項目 V-05 と V-06 を追加。                                                                  |
+| 0.3  | 2026-11-24 | xzyozi | `ViewGuard` と、`Poisoned` からの `restore` の許可条件を追記。                                                                                    |
+| 0.4  | 2026-11-24 | xzyozi | `StrategyArena` ビューをコールバック中のみ有効に変更。因果律違反も `Poisoned` に遷移。V-05 の判定を Rust 側（Miri）と Python 側（pytest）に分割。 |
