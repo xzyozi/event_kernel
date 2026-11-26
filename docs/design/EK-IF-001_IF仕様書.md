@@ -5,7 +5,7 @@ document_number: "EK-IF-001"
 document_role: "normative"
 ssot_scope: "external_interface"
 status: "draft"
-version: "0.2"
+version: "0.3"
 created_at: "2026-11-26"
 updated_at: "2026-11-27"
 author: "xzyozi"
@@ -61,7 +61,7 @@ related_documents:
 
 | 引き継ぎ元       | 引き継ぎ事項                                | 本書での決定・定義箇所                                                                              |
 | :--------------- | :------------------------------------------ | :-------------------------------------------------------------------------------------------------- |
-| BD 4.2節 #1      | `ExecutionPort` 境界呼び出し順序と契約      | 4.1節・4.2節（同一時刻市場イベントでは `on_market_event` → `poll_results` → 戦略コールバックの順） |
+| BD 4.2節 #1      | `ExecutionPort` 境界呼び出し順序と契約      | 4.1節・4.2節（同一時刻市場イベントでは `on_market_event` → `poll_result` → 戦略コールバックの順） |
 | BD 4.2節 #5      | `core-capi`、Python API、Arrow 出力形式     | 2章・4章（`IF-001`〜`IF-003`）。ADR-003 スパイク V-01〜V-06 後に確定版へ更新                        |
 | DS 4.2節         | Arrow 出力のハッシュ対象と形式（NFR-01）    | 4.3.4節（約定履歴・資産推移・状態遷移ログの正準カラム配列に対する SHA-256 定義）                    |
 | DD 5.3節         | 入力 `payload_idx` のアダプタ側規約         | 2.2節（`core` 取り込み前に外部フィード配列を参照するための添字契約。スナップショット時は0）         |
@@ -139,11 +139,12 @@ flowchart LR
 | 関数名                    | 対応 DD 機能 | 主な引数                                                                 | 戻り値（`int32_t`）         | 概要                                                     |
 | :------------------------ | :----------- | :----------------------------------------------------------------------- | :-------------------------- | :------------------------------------------------------- |
 | `ek_capi_abi_version`     | —            | `uint32_t* out_major, uint32_t* out_minor`                               | `OK` / `ERR_INVALID_ARGUMENT` | C ABI バージョンを取得する                               |
-| `ek_kernel_create`              | F-001        | `config*`, `feeds*`, `feed_count`, `exec_vtable*`, `snap_vtable*`, `trace_vtable*`, `strategy*`, `out_handle**` | `OK` / 負のエラーコード | 検証と初期メモリ確保を行い、`Ready` ハンドルを生成する   |
+| `ek_kernel_create`              | F-001        | `config*`, `feeds*`, `feed_count`, `exec_vtable*`, `trace_vtable*`（任意）, `strategy*`, `out_handle**`       | `OK` / 負のエラーコード | 検証と初期メモリ確保を行い、`Ready` ハンドルを生成する   |
 | `ek_kernel_step`                | F-002        | `handle*`, `EkStepResult* out_result`                                                                           | 終了コード / 負のエラー | 1イベントを処理し、結果構造体へ書き込む                  |
 | `ek_kernel_run`                 | F-003        | `handle*`, `uint64_t max_events`, `EkStepResult* out_result`                                                    | 終了コード / 負のエラー | 停止条件まで `step` を繰り返す（`0` は上限なし）         |
 | `ek_kernel_submit_action`       | F-004        | `EkActionContext* ctx`, `const EkAction* action`                                                                | `OK` / 負のエラーコード | 戦略コールバック内から遅延アクションを提出する           |
-| `ek_kernel_capture`             | F-005        | `handle*`, `int64_t trigger_tag`                                                                                | `OK` / 負のエラーコード | 現在の完全状態を `SnapshotPort` 経由で保存する           |
+| `ek_prng_next_u64`              | F-002 補助   | `EkPrng* prng`, `uint64_t* out_value`                                                                           | `OK` / `ERR_INVALID_ARGUMENT` | 戦略・`ExecutionPort` が共有決定論 PRNG から乱数を引く |
+| `ek_kernel_capture`             | F-005        | `handle*`, `const EkSnapVTable* snap_vtable`                                                                    | `OK` / 負のエラーコード | 現在の完全状態を `SnapshotPort` 経由で保存する           |
 | `ek_kernel_restore`             | F-006        | `handle*`, `const uint8_t* blob`, `size_t blob_len`                                                             | `OK` / 負のエラーコード | 検証フェーズ＋適用フェーズにより状態を復元する           |
 | `ek_kernel_state_digest`        | F-005 派生   | `handle*`, `uint8_t out_sha256[32]`                                                                             | `OK` / 負のエラーコード | 保存を伴わず正準バイト列の全セクション SHA-256 を算出する |
 | `ek_kernel_init_strategy_arena` | F-011        | `handle*`, `uint64_t offset`, `const uint8_t* bytes`, `size_t len`                                              | `OK` / 負のエラーコード | 実行前（`Ready` / 処理数0）に `StrategyArena` を初期化する |
@@ -196,15 +197,20 @@ flowchart LR
 | `EkAction`      | `reserved`              | `uint8_t[6]`      |    必須    |  不可  | `0` 埋め必須                                            |
 | `EkAction`      | `latency_ns`            | `int64_t`         |    必須    |  不可  | `1` 以上                                                |
 | `EkAction`      | `payload_ptr`           | `const uint8_t*`  |    必須    |  条件付き | `payload_len > 0` のとき非 NULL                      |
-| `EkAction`      | `payload_len`           | `uint32_t`        |    必須    |  不可  | `payload_record_size` 以下                              |
+| `EkAction`      | `payload_len`           | `uint32_t`        |    必須    |  不可  | `payload_record_size - 8` 以下（超過時は `ERR_INVALID_ARGUMENT`） |
 | `EkStrategyCtx` | `now_ns`                | `int64_t`         |    必須    |  不可  | コールバック呼び出し時の現在時刻                        |
 | `EkStrategyCtx` | `history_headers`       | `const EkEventHeader*` | 必須  |  条件付き | 確定済み過去イベント配列先頭（コールバック中のみ有効） |
 | `EkStrategyCtx` | `history_len`           | `uint32_t`        |    必須    |  不可  | 有効な履歴件数（`history_ring_len` 以下）               |
 | `EkStrategyCtx` | `strategy_arena_ptr`    | `uint8_t*`        |    必須    |  条件付き | `strategy_arena_size > 0` なら非 NULL（コールバック中のみ有効） |
 | `EkStrategyCtx` | `strategy_arena_len`    | `uint64_t`        |    必須    |  不可  | `strategy_arena_size` と一致                            |
+| `EkStrategyCtx` | `prng`                  | `EkPrng*`         |    必須    |  不可  | `ek_prng_next_u64` に渡す共有決定論 PRNG（コールバック中のみ有効） |
 | `EkStrategyCtx` | `action_ctx`            | `EkActionContext*` |   必須    |  不可  | `ek_kernel_submit_action` に渡す不透明コンテキスト      |
 
-- **外部ポート vtable 契約**: `EkFeedVTable`（`peek_next_timestamp`, `pop_next`, `position`, `seek`）、`EkExecVTable`（`on_arrival`, `on_market_event`, `poll_results`, `capture_state`, `restore_state`, `validate_state`）、`EkSnapVTable`（`write_snapshot`, `read_snapshot`）は、すべて `user_data: void*` を第1引数に取り、C 関数戻り値（`0` 成功 / 負値失敗）を返す。各メソッド内部でパニックを起こしてはならない。
+- **外部ポート vtable 契約**: すべて `user_data: void*` を第1引数に取り、C 関数戻り値（`0` 成功 / 負値失敗）を返す。各メソッド内部でパニックを起こしてはならない。
+  - `EkFeedVTable`: `peek_next_timestamp`, `pop_next`, `position`, `validate_position`, `seek`。
+  - `EkExecVTable`: `on_arrival`（引数に `EkPrng*` を含む）, `on_market_event`（引数に `EkPrng*` を含む）, `poll_result`（1件ずつバッファへ書き出し `bool` 出力を返す）, `capture_state`, `validate_state`, `restore_state`。
+  - `EkSnapVTable`: `store(user_data, blob_ptr, blob_len, logical_time_ns, event_count)`（`capture` 時に呼ぶ。`load` は `core` から呼ばずホスト層が管理する）。
+  - `EkTraceVTable`: `write_header`, `write`（`trace_enabled == 1` のとき必須。`0` のときは NULL 可）。
 
 #### 4.1.3 エラー応答（C ABI）
 
@@ -227,6 +233,7 @@ flowchart LR
 | `ERR_PORT_FAILURE`         | -11   | 外部ポート I/O または適用フェーズ失敗           | アダプタ原因調査、`restore` または破棄     |    不可    |
 | `ERR_RESULT_OVERFLOW`      | -12   | ポート結果がキュー容量超過（`Poisoned`）        | `action_queue_capacity` を拡大             |    不可    |
 | `ERR_STRATEGY_FAILURE`     | -13   | 戦略コールバックの失敗返却（`Poisoned`）        | 戦略実装を修正                             |    不可    |
+| `ERR_SNAPSHOT_IO`          | -14   | `SnapshotPort::store` / `load` の保存・読込失敗 | 保存先・権限を確認（カーネル状態は不変）   |  条件付き  |
 | `ERR_PANIC`                | -99   | C 境界でのパニック捕捉（`Poisoned`）            | バグ報告、`restore` または `destroy`       |    不可    |
 
 ---
@@ -234,18 +241,20 @@ flowchart LR
 ### 4.2 契約（IF-ID: IF-002 `bindings/python` Python 拡張 API）
 
 - **概要**: PyO3 と `maturin` により Python へ提供する拡張モジュール（仮称 `event_kernel._core` / 公開パッケージ `event_kernel`）。`core` の安全な Rust API を直接呼び出し、Python 戦略コールバック・NumPy バッファ・Arrow PyCapsule・Python 例外変換を担う（EK-BD-001 C-013）。
-- **呼び出し方式**: Python メソッド呼び出し。コールバックの通過回数を抑えるため、同一時刻または一定件数のイベントを連続メモリビューにまとめたバッチコールバック（`on_events(ctx, batch)`）を標準とし、単一イベント形式も互換 API として維持する（ADR-003 5.1-2）。バッチ化の効果は V-01 スパイク後に確定する。
+- **呼び出し方式**: Python メソッド呼び出し。コールバックの通過回数を抑えるため、同一時刻または一定件数のイベントを連続メモリビューにまとめたバッチコールバック（`on_events(ctx, batch)`）を標準候補とし、単一イベント形式（`core` の `Strategy::on_event` に対応）も互換 API として維持する（ADR-003 5.1-2）。現行 `core`（`v0.0.1`）は 1 イベント単位の `Strategy::on_event` のみを提供しているため、V-01 スパイクでの比較結果を踏まえて `core` へのバッチ配送補助追加要否とバッチ化仕様を確定する。
 - **冪等性**: `close()`（複数回呼び出し安全）および `state_digest()` は冪等。
 
 #### 4.2.1 Python 公開クラス・メソッド契約
 
 | クラス / 関数        | メンバー / 引数                                                      | 戻り値型         | 必須性・制約・振る舞い                                                       |
 | :------------------- | :------------------------------------------------------------------- | :--------------- | :--------------------------------------------------------------------------- |
-| `KernelConfig`       | `history_ring_len`, `arena_size`, `strategy_arena_offset`, `strategy_arena_size`, `action_queue_capacity`, `payload_record_size=64`, `price_scale_exp`, `qty_scale_exp`, `prng_seed`, `exec_state_max_bytes`, `feed_token_max_bytes=4096`, `hash_interval=0`, `trace_enabled=False` | `KernelConfig` | 不変データオブジェクト。制約違反時は `ValueError`                            |
-| `Kernel(config, feeds, execution, snapshot, strategy)` | 各引数は必須（`None` 不可） | `Kernel` | 初期化時に全メモリを確保し `Ready` 状態で生成。容量超過は `KernelCapacityError` |
+| `KernelConfig`       | `history_ring_len`, `arena_size`, `strategy_arena_offset`, `strategy_arena_size`, `action_queue_capacity`, `payload_record_size=64`, `price_scale_exp`, `qty_scale_exp`, `prng_seed`, `exec_state_max_bytes`, `feed_token_max_bytes=4096`, `hash_interval=0`, `trace_enabled=False`, `max_total_bytes` | `KernelConfig` | 不変データオブジェクト。制約違反時は `ValueError`                            |
+| `Kernel(config, feeds, execution, strategy, trace_sink=None)` | `trace_sink` は `trace_enabled=True` のとき必須、`False` のとき省略可 | `Kernel` | 初期化時に全メモリを確保し `Ready` 状態で生成。容量超過は `KernelCapacityError` |
+| `Kernel.init_strategy_arena(offset, data)` | `offset: int`（8の倍数）, `data: bytes | bytearray | memoryview` | `None` | `Ready` かつ `processed_event_count == 0` のときのみ書込可。違反時は `ValueError` |
+| `Kernel.read_strategy_arena(offset=0, length=None)` | `offset: int`, `length: int | None`（省略時は残り全体） | `bytes` | コピーを返す読み取り専用操作（状態不変） |
 | `Kernel.step()`      | なし                                                                 | `StepResult`     | 1ステップ実行。終端時は `status == StepStatus.FINISHED`                      |
 | `Kernel.run(max_events=None)` | `max_events: int | None`（`>= 1` または `None`）       | `StepResult`     | `max_events` または終端、`SnapshotTrigger` まで連続実行                      |
-| `Kernel.capture()`   | なし                                                                 | `bytes` または保存完了 | スナップショット作成。非 seekable 時は `SnapshotUnsupportedError`          |
+| `Kernel.capture(snapshot_port)` | `snapshot_port`: 保存先（`SnapshotPort` 契約）             | `None`           | スナップショット作成・保存。非 seekable 時は `SnapshotUnsupportedError`、保存失敗時は `SnapshotIoError` |
 | `Kernel.restore(blob)` | `blob: bytes | memoryview`（空不可）                             | `None`           | 検証フェーズ後に状態を復元。`Poisoned` からも復元成功で `Ready` 復帰         |
 | `Kernel.state_digest()` | なし                                                               | `bytes`（32バイト SHA-256） | 保存を伴わず正準バイト列の SHA-256 を返す（非 seekable フィード時も可）   |
 | `Kernel.export_fills()` / `export_equity()` / `export_transitions()` | なし | Arrow Stream オブジェクト（`__arrow_c_stream__` 実装） | Polars / PyArrow へゼロコピー受け渡し（IF-003）                              |
@@ -308,7 +317,7 @@ sequenceDiagram
 ### 4.3 契約（IF-ID: IF-003 Arrow ゼロコピー結果出力・ハッシュ契約）
 
 - **概要**: リプレイ実行で蓄積された約定履歴・資産推移・状態遷移ログを、Apache Arrow PyCapsule Interface（`__arrow_c_stream__` / `__arrow_c_array__`）を用いて Polars / PyArrow / NumPy へコピーなしで引き渡す（要件定義書 FR-06-2、ADR-003 5.1-5）。
-- **所有権移譲契約**: 結果バッファは `core` 側（またはアダプタ側）で連続メモリとして構築し、完了後に所有権（`Arc` / `Box`）を Arrow `FFI_ArrowArray` の `private_data` へ移譲する。Python 側でオブジェクトが破棄されると Arrow `release` コールバックが呼ばれ、メモリが解放される。これによりコールバック中のビューと異なりライフタイムを無期限に維持できる。
+- **所有権移譲と蓄積の責務境界**: `core`（`v0.0.1`）自体は固定スキーマの約定・資産テーブルを内部保持せず（EK-DD-001 2.5節）、`OrderAck` / `Fill` は `ExecutionPort`・戦略へ通知する。そのため、Arrow 出力用の連続列バッファは境界層（`bindings/python` の結果シンク／戦略・`ExecutionPort` ラッパ）またはアダプタ側で蓄積し、リプレイ完了後（出力時）に所有権（`Arc` / `Box`）を Arrow `FFI_ArrowArray` の `private_data` へ移譲する。Python 側でオブジェクトが破棄されると Arrow `release` コールバックが呼ばれ、メモリが解放される。これによりコールバック中のビューと異なりライフタイムを無期限に維持できる。
 - **呼び出し条件**: ハンドルが `Ready` または `Finished` のときに呼び出せる。`Running` 中は `ReentrantError` で拒否する。
 
 #### 4.3.1 約定履歴（`fills`）Arrow スキーマ
@@ -410,3 +419,4 @@ sequenceDiagram
 | :------ | :--------- | :----- | :---------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Rev.0.1 | 2026-11-26 | xzyozi | 初版ドラフト。BD 4.2節、DS 4.2節、ADR-003（層分離案C）を引き継ぎ、`core-capi` C ABI、`bindings/python` PyO3 API、Arrow PyCapsule 出力とハッシュ契約を定義。 |
 | Rev.0.2 | 2026-11-27 | xzyozi | `EK-DD-001`・`EK-TEST-001` との相互リンクを追加し、`F-011`/`F-012`、`max_total_bytes`、`StepResult.detail`、`ERR_SNAPSHOT_IO`、`payload_record_size >= 16`、`TC-ID` 対応を同期した。 |
+| Rev.0.3 | 2026-11-27 | xzyozi | 実装済み `core/` と整合させ、`capture(SnapshotPort)` 引数・`EkAction.payload_len <= payload_record_size - 8`・`ERR_SNAPSHOT_IO (-14)`（C ABI）・`EkFeedVTable`/`EkExecVTable`/`EkSnapVTable`/`EkTraceVTable`・`EkPrng`・Python `KernelConfig.max_total_bytes`/`init_strategy_arena`/`read_strategy_arena`/`trace_sink`・V-01/IF-003 責務境界を反映した。 |
