@@ -37,8 +37,43 @@ impl ActionQueue {
         })
     }
 
+    pub(crate) fn len(&self) -> usize {
+        self.heap_len
+    }
+
     pub(crate) fn record_size(&self) -> usize {
         self.record
+    }
+
+    pub(crate) fn write_sorted_records(
+        &self,
+        sort_scratch: &mut [usize],
+        mut write_one: impl FnMut(EventHeader, &[u8]) -> Result<(), (i32, i32)>,
+    ) -> Result<(), (i32, i32)> {
+        let len = self.heap_len;
+        let Some(indices) = sort_scratch.get_mut(..len) else {
+            return Err((crate::status::ERR_PANIC, 0));
+        };
+        let Some(active) = self.heap.get(..len) else {
+            return Err((crate::status::ERR_PANIC, 0));
+        };
+        indices.copy_from_slice(active);
+        indices.sort_unstable_by_key(|&slot| {
+            self.headers
+                .get(slot)
+                .map_or(MAX_KEY, EventHeader::order_key)
+        });
+        for &slot in indices.iter() {
+            let Some(&header) = self.headers.get(slot) else {
+                return Err((crate::status::ERR_PANIC, 0));
+            };
+            let offset = slot * self.record;
+            let Some(payload) = self.payloads.get(offset..offset + self.record) else {
+                return Err((crate::status::ERR_PANIC, 0));
+            };
+            write_one(header, payload)?;
+        }
+        Ok(())
     }
 
     pub(crate) fn is_full(&self) -> bool {

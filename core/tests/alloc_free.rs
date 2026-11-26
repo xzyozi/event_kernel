@@ -4,43 +4,62 @@ mod common;
 
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::cell::Cell;
-use std::sync::atomic::{AtomicU64, Ordering};
 
 use common::*;
 use ek_core::*;
 
 struct CountingAllocator;
 
-static ALLOCS: AtomicU64 = AtomicU64::new(0);
-static DEALLOCS: AtomicU64 = AtomicU64::new(0);
-
 thread_local! {
-    // テストのスレッドだけを数える（テストハーネスの別スレッドの確保を除く）。
+    // テストのスレッドごとに数える（並列実行される別テストと干渉しない）。
     static COUNTING: Cell<bool> = const { Cell::new(false) };
+    static ALLOCS: Cell<u64> = const { Cell::new(0) };
+    static DEALLOCS: Cell<u64> = const { Cell::new(0) };
 }
 
 fn counting() -> bool {
     COUNTING.try_with(Cell::get).unwrap_or(false)
 }
 
+fn add_alloc() {
+    let _ = ALLOCS.try_with(|c| c.set(c.get() + 1));
+}
+
+fn add_dealloc() {
+    let _ = DEALLOCS.try_with(|c| c.set(c.get() + 1));
+}
+
+fn reset_counts() {
+    ALLOCS.with(|c| c.set(0));
+    DEALLOCS.with(|c| c.set(0));
+}
+
+fn alloc_count() -> u64 {
+    ALLOCS.with(Cell::get)
+}
+
+fn dealloc_count() -> u64 {
+    DEALLOCS.with(Cell::get)
+}
+
 unsafe impl GlobalAlloc for CountingAllocator {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
         if counting() {
-            ALLOCS.fetch_add(1, Ordering::SeqCst);
+            add_alloc();
         }
         unsafe { System.alloc(layout) }
     }
 
     unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
         if counting() {
-            DEALLOCS.fetch_add(1, Ordering::SeqCst);
+            add_dealloc();
         }
         unsafe { System.dealloc(ptr, layout) }
     }
 
     unsafe fn realloc(&self, ptr: *mut u8, layout: Layout, new_size: usize) -> *mut u8 {
         if counting() {
-            ALLOCS.fetch_add(1, Ordering::SeqCst);
+            add_alloc();
         }
         unsafe { System.realloc(ptr, layout, new_size) }
     }
@@ -79,6 +98,7 @@ fn ac05_no_heap_allocation_after_create() {
     feed.events.push(tick(4_000, 10_001));
     let kernel = Kernel::create(config(), feed, FillNextExec::new(), Busy { events: 0 }).unwrap();
 
+    reset_counts();
     COUNTING.with(|c| c.set(true));
     let first = kernel.step();
     let rest = kernel.run(RunLimit { max_events: 500 });
@@ -94,14 +114,72 @@ fn ac05_no_heap_allocation_after_create() {
         "{}",
         last.processed_event_count
     );
-    assert_eq!(ALLOCS.load(Ordering::SeqCst), 0, "確保の回数");
-    assert_eq!(DEALLOCS.load(Ordering::SeqCst), 0, "解放の回数");
+    assert_eq!(alloc_count(), 0, "確保の回数");
+    assert_eq!(dealloc_count(), 0, "解放の回数");
 
     // 自己検査: 数える区間での確保が、実際に数えられることを確かめる。
     COUNTING.with(|c| c.set(true));
     let probe = std::hint::black_box(vec![0u8; 16]);
     drop(probe);
     COUNTING.with(|c| c.set(false));
-    assert_eq!(ALLOCS.load(Ordering::SeqCst), 1);
-    assert_eq!(DEALLOCS.load(Ordering::SeqCst), 1);
+    assert_eq!(alloc_count(), 1);
+    assert_eq!(dealloc_count(), 1);
+}
+
+struct FixedTraceSink {
+    records: Vec<TraceRecord>,
+}
+
+impl FixedTraceSink {
+    fn with_capacity(capacity: usize) -> Self {
+        Self {
+            records: Vec::with_capacity(capacity),
+        }
+    }
+}
+
+impl TraceSink for FixedTraceSink {
+    fn write_header(&mut self, _header: &TraceHeader) -> Result<(), PortError> {
+        Ok(())
+    }
+
+    fn write(&mut self, record: &TraceRecord) -> Result<(), PortError> {
+        if self.records.len() < self.records.capacity() {
+            self.records.push(*record);
+        }
+        Ok(())
+    }
+}
+
+#[test]
+fn ac05_no_heap_allocation_with_trace_and_state_hash() {
+    let timestamps: Vec<i64> = (0..1_000).map(|i| i * 2).collect();
+    let feed = VecFeed::ticks(&timestamps);
+    let mut cfg = config();
+    cfg.trace_enabled = true;
+    cfg.hash_interval = 10;
+
+    let kernel = Kernel::create_with_trace(
+        cfg,
+        feed,
+        FillNextExec::new(),
+        Busy { events: 0 },
+        FixedTraceSink::with_capacity(4_096),
+    )
+    .unwrap();
+
+    reset_counts();
+    COUNTING.with(|c| c.set(true));
+    let first = kernel.step();
+    let rest = kernel.run(RunLimit { max_events: 500 });
+    let last = kernel.run(RunLimit::default());
+    let digest = kernel.state_digest().unwrap();
+    COUNTING.with(|c| c.set(false));
+
+    assert_eq!(first.status, OK);
+    assert_eq!(rest.status, RUN_LIMIT_REACHED);
+    assert_eq!(last.status, STEP_FINISHED);
+    assert_ne!(digest, [0u8; 32]);
+    assert_eq!(alloc_count(), 0, "トレース・ハッシュ時の確保回数");
+    assert_eq!(dealloc_count(), 0, "トレース・ハッシュ時の解放回数");
 }

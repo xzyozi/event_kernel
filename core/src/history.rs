@@ -51,7 +51,11 @@ impl HistoryRing {
         }
     }
 
-    fn get(&self, index: usize) -> Option<EventRecord<'_>> {
+    pub(crate) fn len(&self) -> usize {
+        self.len
+    }
+
+    pub(crate) fn get(&self, index: usize) -> Option<EventRecord<'_>> {
         if index >= self.len {
             return None;
         }

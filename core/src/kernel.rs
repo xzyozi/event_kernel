@@ -4,15 +4,18 @@ use alloc::vec;
 use alloc::vec::Vec;
 use core::cell::RefCell;
 
+use crate::canonical::{CanonicalInputs, CanonicalScratch, write_canonical_sections};
 use crate::config::KernelConfig;
 use crate::event::{
     ACTION_PAYLOAD_OFFSET, ACTION_STREAM_ID, EventHeader, EventRecord, event_type, flags,
 };
+use crate::hash::{sha256, xxh3_64};
 use crate::history::{HistoryRing, HistoryView};
-use crate::ports::{EventFeedPort, ExecutionPort, PortError, Strategy};
+use crate::ports::{EventFeedPort, ExecutionPort, NoTraceSink, PortError, Strategy, TraceSink};
 use crate::prng::Prng;
 use crate::queue::ActionQueue;
 use crate::status::*;
+use crate::trace::{TRACE_FLAG_HASH_PRESENT, TraceHeader, TraceRecord};
 use crate::util::copy_bytes;
 
 /// 最初のイベントを処理するまでの論理時刻（`i64` の最小値）。
@@ -141,11 +144,11 @@ impl Context<'_> {
 }
 
 /// カーネルのハンドル（BD の C-009）。本体を `RefCell` で包み、再入を検出する（EK-DD-001 3.2節）。
-pub struct Kernel<F, E, S> {
-    inner: RefCell<Inner<F, E, S>>,
+pub struct Kernel<F, E, S, T = NoTraceSink> {
+    inner: RefCell<Inner<F, E, S, T>>,
 }
 
-struct Inner<F, E, S> {
+struct Inner<F, E, S, T> {
     config: KernelConfig,
     state: HandleState,
     now_ns: i64,
@@ -156,6 +159,7 @@ struct Inner<F, E, S> {
     feed: F,
     exec: E,
     strategy: S,
+    trace: T,
     head_present: bool,
     head_header: EventHeader,
     head_payload: Vec<u8>,
@@ -166,6 +170,10 @@ struct Inner<F, E, S> {
     queue: ActionQueue,
     history: HistoryRing,
     arena: Vec<u8>,
+    canonical_buf: Vec<u8>,
+    action_sort_scratch: Vec<usize>,
+    feed_token_scratch: Vec<u8>,
+    exec_state_scratch: Vec<u8>,
 }
 
 /// ステップの中の失敗。`(終了コード, 詳細コード)`。
@@ -175,15 +183,35 @@ fn port_failure(error: PortError) -> Failure {
     (ERR_PORT_FAILURE, error.0)
 }
 
-impl<F, E, S> Kernel<F, E, S>
+impl<F, E, S> Kernel<F, E, S, NoTraceSink>
 where
     F: EventFeedPort,
     E: ExecutionPort,
     S: Strategy,
 {
-    /// カーネルを作成する（F-001）。確保は、この関数に限る。失敗時はハンドルを作らない。
-    pub fn create(config: KernelConfig, mut feed: F, exec: E, strategy: S) -> Result<Self, i32> {
-        config.validate(1)?;
+    /// トレース出力なしのカーネルを作成する（F-001）。
+    /// `config.trace_enabled` が true の場合は `ERR_INVALID_ARGUMENT` を返す。
+    pub fn create(config: KernelConfig, feed: F, exec: E, strategy: S) -> Result<Self, i32> {
+        Kernel::create_with_trace(config, feed, exec, strategy, NoTraceSink)
+    }
+}
+
+impl<F, E, S, T> Kernel<F, E, S, T>
+where
+    F: EventFeedPort,
+    E: ExecutionPort,
+    S: Strategy,
+    T: TraceSink,
+{
+    /// `TraceSink` を伴うカーネルを作成する（F-001）。確保は、この関数に限る。失敗時はハンドルを作らない。
+    pub fn create_with_trace(
+        config: KernelConfig,
+        mut feed: F,
+        exec: E,
+        strategy: S,
+        mut trace: T,
+    ) -> Result<Self, i32> {
+        config.validate(1, trace.is_present())?;
         let payload_len =
             usize::try_from(config.payload_record_size).map_err(|_| ERR_CAPACITY_EXCEEDED)?;
         let queue_len =
@@ -191,6 +219,15 @@ where
         let history_len =
             usize::try_from(config.history_ring_len).map_err(|_| ERR_CAPACITY_EXCEEDED)?;
         let arena_len = usize::try_from(config.arena_size).map_err(|_| ERR_CAPACITY_EXCEEDED)?;
+        let snapshot_len = config
+            .max_snapshot_bytes(1)
+            .and_then(|n| usize::try_from(n).ok())
+            .ok_or(ERR_CAPACITY_EXCEEDED)?;
+        let feed_token_len =
+            usize::try_from(config.feed_token_max_bytes).map_err(|_| ERR_CAPACITY_EXCEEDED)?;
+        let exec_state_len =
+            usize::try_from(config.exec_state_max_bytes).map_err(|_| ERR_CAPACITY_EXCEEDED)?;
+
         let queue = ActionQueue::new(queue_len, payload_len).ok_or(ERR_CAPACITY_EXCEEDED)?;
         let history = HistoryRing::new(history_len, payload_len).ok_or(ERR_CAPACITY_EXCEEDED)?;
 
@@ -198,6 +235,12 @@ where
         let mut head_payload = vec![0u8; payload_len];
         let head_present =
             intake(&mut feed, &mut head_header, &mut head_payload).map_err(|(code, _)| code)?;
+
+        if config.trace_enabled {
+            trace
+                .write_header(&TraceHeader::new(config.hash_interval))
+                .map_err(|_| ERR_PORT_FAILURE)?;
+        }
 
         Ok(Self {
             inner: RefCell::new(Inner {
@@ -211,6 +254,7 @@ where
                 feed,
                 exec,
                 strategy,
+                trace,
                 head_present,
                 head_header,
                 head_payload,
@@ -221,6 +265,10 @@ where
                 queue,
                 history,
                 arena: vec![0; arena_len],
+                canonical_buf: vec![0; snapshot_len],
+                action_sort_scratch: vec![0; queue_len],
+                feed_token_scratch: vec![0; feed_token_len],
+                exec_state_scratch: vec![0; exec_state_len],
             }),
         })
     }
@@ -259,6 +307,42 @@ where
         }
     }
 
+    /// 保存を伴わずに、現在の全セクション正準バイト列（EK-DS-001 2.5節）の SHA-256 を計算する。
+    /// `seekable` でないフィードがあっても計算できる。
+    pub fn state_digest(&self) -> Result<[u8; 32], i32> {
+        let mut inner = self.inner.try_borrow_mut().map_err(|_| ERR_REENTRANT)?;
+        if inner.state == HandleState::Poisoned {
+            return Err(ERR_POISONED);
+        }
+        let len = inner.build_canonical(true).map_err(|(code, _)| code)?;
+        let bytes = inner.canonical_buf.get(..len).ok_or(ERR_PANIC)?;
+        Ok(sha256(bytes))
+    }
+
+    /// 現在の正準セクション列を `out` へコピーし、書き込んだバイト数を返す。
+    /// `include_config_and_history` が false の場合、ステップハッシュ対象（セクション 2,3,4,5,6,8,9）を書く。
+    pub fn write_canonical_state(
+        &self,
+        include_config_and_history: bool,
+        out: &mut [u8],
+    ) -> Result<usize, i32> {
+        let mut inner = self.inner.try_borrow_mut().map_err(|_| ERR_REENTRANT)?;
+        if inner.state == HandleState::Poisoned {
+            return Err(ERR_POISONED);
+        }
+        let len = inner
+            .build_canonical(include_config_and_history)
+            .map_err(|(code, _)| code)?;
+        let Some(src) = inner.canonical_buf.get(..len) else {
+            return Err(ERR_PANIC);
+        };
+        let Some(dst) = out.get_mut(..len) else {
+            return Err(ERR_INVALID_ARGUMENT);
+        };
+        dst.copy_from_slice(src);
+        Ok(len)
+    }
+
     /// ハンドルの状態。ステップの実行中に呼ばれた場合は `Running`。
     pub fn state(&self) -> HandleState {
         self.inner
@@ -272,6 +356,12 @@ where
         Ok(read(&inner.feed, &inner.exec, &inner.strategy))
     }
 
+    /// トレース出力先を読み取る。ステップの実行中は `ERR_REENTRANT`。
+    pub fn inspect_trace<R>(&self, read: impl FnOnce(&T) -> R) -> Result<R, i32> {
+        let inner = self.inner.try_borrow().map_err(|_| ERR_REENTRANT)?;
+        Ok(read(&inner.trace))
+    }
+
     /// 設定。ステップの実行中は `ERR_REENTRANT`。
     pub fn config(&self) -> Result<KernelConfig, i32> {
         let inner = self.inner.try_borrow().map_err(|_| ERR_REENTRANT)?;
@@ -282,6 +372,12 @@ where
     pub fn destroy(self) -> (F, E, S) {
         let inner = self.inner.into_inner();
         (inner.feed, inner.exec, inner.strategy)
+    }
+
+    /// ハンドルを破棄し、トレース出力先を含むポートと戦略を返す（F-007）。
+    pub fn destroy_with_trace(self) -> (F, E, S, T) {
+        let inner = self.inner.into_inner();
+        (inner.feed, inner.exec, inner.strategy, inner.trace)
     }
 }
 
@@ -316,11 +412,12 @@ fn intake<F: EventFeedPort>(
     Ok(true)
 }
 
-impl<F, E, S> Inner<F, E, S>
+impl<F, E, S, T> Inner<F, E, S, T>
 where
     F: EventFeedPort,
     E: ExecutionPort,
     S: Strategy,
+    T: TraceSink,
 {
     fn result(&self, status: i32, detail: i32) -> StepResult {
         StepResult {
@@ -329,6 +426,52 @@ where
             processed_event_count: self.processed_event_count,
             now_ns: self.now_ns,
         }
+    }
+
+    fn build_canonical(&mut self, include_config_and_history: bool) -> Result<usize, Failure> {
+        let Inner {
+            config,
+            now_ns,
+            processed_event_count,
+            next_action_sequence_id,
+            rng,
+            feed,
+            exec,
+            head_present,
+            head_header,
+            head_payload,
+            queue,
+            history,
+            arena,
+            canonical_buf,
+            action_sort_scratch,
+            feed_token_scratch,
+            exec_state_scratch,
+            ..
+        } = self;
+        let inputs = CanonicalInputs {
+            config,
+            now_ns: *now_ns,
+            processed_event_count: *processed_event_count,
+            next_action_sequence_id: *next_action_sequence_id,
+            rng,
+            arena,
+            head_present: *head_present,
+            head_header: *head_header,
+            head_payload,
+            feed_stream_id: FEED_STREAM_ID,
+            queue,
+            history,
+            feed,
+            exec,
+        };
+        let mut scratch = CanonicalScratch {
+            buf: canonical_buf,
+            action_sort: action_sort_scratch,
+            feed_token: feed_token_scratch,
+            exec_state: exec_state_scratch,
+        };
+        write_canonical_sections(&inputs, include_config_and_history, &mut scratch)
     }
 
     /// `StrategyArena` の内側の範囲を、`arena` 全体の添字の範囲にする。範囲外なら `None`。
@@ -449,7 +592,42 @@ where
         if from_feed && let Err(failure) = self.refill(header) {
             return self.poison(failure);
         }
-        // 手順9（トレースとハッシュ）は、縦切りの範囲外。
+        // 手順9: トレースと状態ハッシュ（EK-DD-001 3.1節）。
+        if self.config.trace_enabled {
+            let hash_present = self.config.hash_interval != 0
+                && self
+                    .processed_event_count
+                    .is_multiple_of(self.config.hash_interval);
+            let state_hash = if hash_present {
+                let len = match self.build_canonical(false) {
+                    Ok(len) => len,
+                    Err(failure) => return self.poison(failure),
+                };
+                let Some(bytes) = self.canonical_buf.get(..len) else {
+                    return self.poison((ERR_PANIC, 0));
+                };
+                xxh3_64(bytes)
+            } else {
+                0
+            };
+            let record = TraceRecord {
+                timestamp_ns: header.timestamp_ns,
+                sequence_id: header.sequence_id,
+                stream_id: header.stream_id,
+                event_type: header.event_type,
+                event_flags: header.flags,
+                state_hash,
+                trace_flags: if hash_present {
+                    TRACE_FLAG_HASH_PRESENT
+                } else {
+                    0
+                },
+                reserved: [0; 6],
+            };
+            if let Err(err) = self.trace.write(&record) {
+                return self.poison(port_failure(err));
+            }
+        }
         // 手順10。
         self.result(OK, 0)
     }

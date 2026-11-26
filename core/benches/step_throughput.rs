@@ -144,6 +144,103 @@ fn env_usize(name: &str, default: usize) -> usize {
         .unwrap_or(default)
 }
 
+struct CountingTraceSink {
+    count: u64,
+    last_hash: u64,
+}
+
+impl TraceSink for CountingTraceSink {
+    #[inline]
+    fn write_header(&mut self, _header: &TraceHeader) -> Result<(), PortError> {
+        Ok(())
+    }
+
+    #[inline]
+    fn write(&mut self, record: &TraceRecord) -> Result<(), PortError> {
+        self.count += 1;
+        if record.trace_flags & TRACE_FLAG_HASH_PRESENT != 0 {
+            self.last_hash = record.state_hash;
+        }
+        Ok(())
+    }
+}
+
+fn run_bench(
+    label: &str,
+    events: usize,
+    runs: usize,
+    headers: &[EventHeader],
+    payloads: &[u8],
+    hash_interval: u64,
+    trace_enabled: bool,
+) {
+    let config = KernelConfig {
+        history_ring_len: 64,
+        arena_size: 4096,
+        strategy_arena_offset: 0,
+        strategy_arena_size: 4096,
+        action_queue_capacity: 1024,
+        payload_record_size: PAYLOAD as u32,
+        price_scale_exp: -2,
+        qty_scale_exp: 0,
+        prng_seed: 1,
+        exec_state_max_bytes: 64,
+        feed_token_max_bytes: 16,
+        hash_interval,
+        trace_enabled,
+        max_total_bytes: 1 << 24,
+    };
+
+    let mut rates = Vec::with_capacity(runs);
+    for run in 0..runs {
+        let feed = SliceFeed {
+            headers,
+            payloads,
+            next: 0,
+        };
+        let strategy = BenchStrategy {
+            window: [0; MA_LEN],
+            pos: 0,
+            sum: 0,
+            market_events: 0,
+            signals: 0,
+            fills: 0,
+        };
+        let sink = CountingTraceSink {
+            count: 0,
+            last_hash: 0,
+        };
+        let kernel =
+            Kernel::create_with_trace(config, feed, NextEventFill::default(), strategy, sink)
+                .unwrap_or_else(|code| panic!("create failed: {code}"));
+        let start = Instant::now();
+        let result = kernel.run(RunLimit::default());
+        let elapsed = start.elapsed();
+        assert_eq!(result.status, STEP_FINISHED, "run failed: {result:?}");
+        let (_, exec, strategy, trace) = kernel.destroy_with_trace();
+        let rate = result.processed_event_count as f64 / elapsed.as_secs_f64();
+        println!(
+            "[{label}] run {run}: processed={} market={} fills={} signals={} trace_count={} last_hash={:#018x} elapsed={:.3}s rate={:.0} events/s",
+            result.processed_event_count,
+            strategy.market_events,
+            exec.fills,
+            black_box(strategy.signals),
+            trace.count,
+            black_box(trace.last_hash),
+            elapsed.as_secs_f64(),
+            rate
+        );
+        rates.push(rate);
+    }
+    rates.sort_by(f64::total_cmp);
+    let median = rates[rates.len() / 2];
+    println!("[{label}] median: {median:.0} events/s (runs={runs}, input={events} market events)");
+    println!(
+        "[{label}] NFR-03 (>= 10,000,000 events/s): {}",
+        if median >= 1e7 { "met" } else { "not met" }
+    );
+}
+
 fn main() {
     let events = env_usize("EK_BENCH_EVENTS", 10_000_000);
     let runs = env_usize("EK_BENCH_RUNS", 5).max(3);
@@ -168,62 +265,14 @@ fn main() {
         payloads[i * PAYLOAD..i * PAYLOAD + 8].copy_from_slice(&price.to_le_bytes());
     }
 
-    let config = KernelConfig {
-        history_ring_len: 64,
-        arena_size: 4096,
-        strategy_arena_offset: 0,
-        strategy_arena_size: 4096,
-        action_queue_capacity: 1024,
-        payload_record_size: PAYLOAD as u32,
-        price_scale_exp: -2,
-        qty_scale_exp: 0,
-        prng_seed: 1,
-        exec_state_max_bytes: 64,
-        feed_token_max_bytes: 16,
-        hash_interval: 0,
-        trace_enabled: false,
-        max_total_bytes: 1 << 24,
-    };
-
-    let mut rates = Vec::with_capacity(runs);
-    for run in 0..runs {
-        let feed = SliceFeed {
-            headers: &headers,
-            payloads: &payloads,
-            next: 0,
-        };
-        let strategy = BenchStrategy {
-            window: [0; MA_LEN],
-            pos: 0,
-            sum: 0,
-            market_events: 0,
-            signals: 0,
-            fills: 0,
-        };
-        let kernel = Kernel::create(config, feed, NextEventFill::default(), strategy)
-            .unwrap_or_else(|code| panic!("create failed: {code}"));
-        let start = Instant::now();
-        let result = kernel.run(RunLimit::default());
-        let elapsed = start.elapsed();
-        assert_eq!(result.status, STEP_FINISHED, "run failed: {result:?}");
-        let (_, exec, strategy) = kernel.destroy();
-        let rate = result.processed_event_count as f64 / elapsed.as_secs_f64();
-        println!(
-            "run {run}: processed={} market={} fills={} signals={} elapsed={:.3}s rate={:.0} events/s",
-            result.processed_event_count,
-            strategy.market_events,
-            exec.fills,
-            black_box(strategy.signals),
-            elapsed.as_secs_f64(),
-            rate
-        );
-        rates.push(rate);
-    }
-    rates.sort_by(f64::total_cmp);
-    let median = rates[rates.len() / 2];
-    println!("median: {median:.0} events/s (runs={runs}, input={events} market events)");
-    println!(
-        "NFR-03 (>= 10,000,000 events/s): {}",
-        if median >= 1e7 { "met" } else { "not met" }
+    run_bench("baseline", events, runs, &headers, &payloads, 0, false);
+    run_bench(
+        "trace+xxh3(10k)",
+        events,
+        runs,
+        &headers,
+        &payloads,
+        10_000,
+        true,
     );
 }
