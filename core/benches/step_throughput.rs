@@ -124,7 +124,7 @@ impl Strategy for BenchStrategy {
             self.signals += 1;
         }
         self.market_events += 1;
-        if self.market_events % 100 == 0 {
+        if self.market_events.is_multiple_of(100) {
             let action = Action {
                 action_kind: 1,
                 latency_ns: 1,
