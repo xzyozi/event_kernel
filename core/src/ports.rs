@@ -1,5 +1,7 @@
 //! ポートと戦略の呼び出し契約（EK-DD-001 2.7節、2.8節）。
 
+use alloc::boxed::Box;
+
 use crate::event::{EventHeader, EventRecord};
 use crate::history::HistoryView;
 use crate::kernel::Context;
@@ -33,6 +35,20 @@ pub trait EventFeedPort {
             seekable: false,
             len: 0,
         })
+    }
+}
+
+impl<F: EventFeedPort + ?Sized> EventFeedPort for Box<F> {
+    fn peek_next_timestamp(&mut self) -> Result<Option<i64>, PortError> {
+        (**self).peek_next_timestamp()
+    }
+
+    fn pop_next(&mut self, header: &mut EventHeader, payload: &mut [u8]) -> Result<(), PortError> {
+        (**self).pop_next(header, payload)
+    }
+
+    fn position(&self, out: &mut [u8]) -> Result<FeedPosition, PortError> {
+        (**self).position(out)
     }
 }
 

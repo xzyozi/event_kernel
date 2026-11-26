@@ -183,3 +183,55 @@ fn ac05_no_heap_allocation_with_trace_and_state_hash() {
     assert_eq!(alloc_count(), 0, "トレース・ハッシュ時の確保回数");
     assert_eq!(dealloc_count(), 0, "トレース・ハッシュ時の解放回数");
 }
+
+#[test]
+fn ac05_no_heap_allocation_with_multi_feed_and_trace() {
+    let f0 = VecFeed::new((0..500).map(|i| tick(i * 2, i as u64)).collect());
+    let f1 = VecFeed::new(
+        (0..500)
+            .map(|i| EventHeader {
+                timestamp_ns: i * 2,
+                sequence_id: i as u64,
+                stream_id: 1,
+                event_type: event_type::BAR,
+                flags: 0,
+                payload_idx: 0,
+            })
+            .collect(),
+    );
+    let f2 = VecFeed::new(
+        (0..250)
+            .map(|i| EventHeader {
+                timestamp_ns: i * 4 + 1,
+                sequence_id: i as u64,
+                stream_id: 2,
+                event_type: event_type::INDICATOR,
+                flags: 0,
+                payload_idx: 0,
+            })
+            .collect(),
+    );
+    let mut cfg = config();
+    cfg.trace_enabled = true;
+    cfg.hash_interval = 10;
+
+    let kernel = Kernel::create_multi_with_trace(
+        cfg,
+        vec![f0, f1, f2],
+        FillNextExec::new(),
+        Busy { events: 0 },
+        FixedTraceSink::with_capacity(4_096),
+    )
+    .unwrap();
+
+    reset_counts();
+    COUNTING.with(|c| c.set(true));
+    let res = kernel.run(RunLimit::default());
+    let digest = kernel.state_digest().unwrap();
+    COUNTING.with(|c| c.set(false));
+
+    assert_eq!(res.status, STEP_FINISHED);
+    assert_ne!(digest, [0u8; 32]);
+    assert_eq!(alloc_count(), 0, "複数フィード時の確保回数");
+    assert_eq!(dealloc_count(), 0, "複数フィード時の解放回数");
+}
