@@ -20,9 +20,10 @@ mod hash;
 mod history;
 mod kernel;
 mod merge;
-pub mod ports;
+mod ports;
 mod prng;
 mod queue;
+mod snapshot;
 pub mod status;
 mod trace;
 mod util;
@@ -35,10 +36,14 @@ pub use hash::{Sha256, sha256, xxh3_64};
 pub use history::HistoryView;
 pub use kernel::{Action, CLOCK_UNSET_NS, Context, HandleState, Kernel, RunLimit, StepResult};
 pub use ports::{
-    EventFeedPort, ExecutionPort, FeedPosition, NoTraceSink, PortError, Strategy, StrategyStatus,
-    TraceSink,
+    EventFeedPort, ExecutionPort, FeedPosition, NoTraceSink, PortError, SnapshotPort, Strategy,
+    StrategyStatus, TraceSink,
 };
 pub use prng::Prng;
+pub use snapshot::{
+    SNAPSHOT_FORMAT_MAJOR, SNAPSHOT_FORMAT_MINOR, SNAPSHOT_HEADER_SIZE, SNAPSHOT_MAGIC,
+    SNAPSHOT_REQUIRED_SECTION_COUNT,
+};
 pub use status::*;
 pub use trace::{
     TRACE_FLAG_HASH_PRESENT, TRACE_FORMAT_MAJOR, TRACE_FORMAT_MINOR, TRACE_HASH_ALGORITHM_XXH3_64,

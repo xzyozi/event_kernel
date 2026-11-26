@@ -55,6 +55,11 @@ impl HistoryRing {
         self.len
     }
 
+    pub(crate) fn clear(&mut self) {
+        self.start = 0;
+        self.len = 0;
+    }
+
     pub(crate) fn get(&self, index: usize) -> Option<EventRecord<'_>> {
         if index >= self.len {
             return None;

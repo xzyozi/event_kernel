@@ -4,7 +4,9 @@ use alloc::vec;
 use alloc::vec::Vec;
 use core::cell::RefCell;
 
-use crate::canonical::{CanonicalInputs, CanonicalScratch, write_canonical_sections};
+use crate::canonical::{
+    CanonicalInputs, CanonicalMode, CanonicalScratch, write_canonical_sections,
+};
 use crate::config::KernelConfig;
 use crate::event::{
     ACTION_PAYLOAD_OFFSET, ACTION_STREAM_ID, EventHeader, EventRecord, event_type, flags,
@@ -12,9 +14,15 @@ use crate::event::{
 use crate::hash::{sha256, xxh3_64};
 use crate::history::{HistoryRing, HistoryView};
 use crate::merge::MergeQueue;
-use crate::ports::{EventFeedPort, ExecutionPort, NoTraceSink, PortError, Strategy, TraceSink};
+use crate::ports::{
+    EventFeedPort, ExecutionPort, NoTraceSink, PortError, SnapshotPort, Strategy, TraceSink,
+};
 use crate::prng::Prng;
 use crate::queue::ActionQueue;
+use crate::snapshot::{
+    SNAPSHOT_HEADER_SIZE, feed_token_at, parse_and_validate, read_event_header,
+    write_snapshot_header,
+};
 use crate::status::*;
 use crate::trace::{TRACE_FLAG_HASH_PRESENT, TraceHeader, TraceRecord};
 use crate::util::copy_bytes;
@@ -333,6 +341,27 @@ where
         }
     }
 
+    /// 現在の状態をスナップショット（EK-DS-001 2.2/2.3節）として `SnapshotPort` へ保存する（F-005）。
+    ///
+    /// どの失敗でもカーネルの状態を変更しない。
+    pub fn capture(&self, port: &mut impl SnapshotPort) -> i32 {
+        let Ok(mut inner) = self.inner.try_borrow_mut() else {
+            return ERR_REENTRANT;
+        };
+        inner.capture(port)
+    }
+
+    /// スナップショットのバイト列から状態を復元する（F-006、EK-DD-001 3.3節）。
+    ///
+    /// 検証フェーズの失敗では状態を変更せず、適用フェーズの失敗では `Poisoned` に遷移する。
+    /// `Poisoned` からの復元が成功した場合は `Ready` に戻る。
+    pub fn restore(&self, blob: &[u8]) -> i32 {
+        let Ok(mut inner) = self.inner.try_borrow_mut() else {
+            return ERR_REENTRANT;
+        };
+        inner.restore(blob)
+    }
+
     /// 保存を伴わずに、現在の全セクション正準バイト列（EK-DS-001 2.5節）の SHA-256 を計算する。
     /// `seekable` でないフィードがあっても計算できる。
     pub fn state_digest(&self) -> Result<[u8; 32], i32> {
@@ -340,7 +369,9 @@ where
         if inner.state == HandleState::Poisoned {
             return Err(ERR_POISONED);
         }
-        let len = inner.build_canonical(true).map_err(|(code, _)| code)?;
+        let len = inner
+            .build_canonical(CanonicalMode::FullDigest, 0)
+            .map_err(|(code, _)| code)?;
         let bytes = inner.canonical_buf.get(..len).ok_or(ERR_PANIC)?;
         Ok(sha256(bytes))
     }
@@ -356,9 +387,12 @@ where
         if inner.state == HandleState::Poisoned {
             return Err(ERR_POISONED);
         }
-        let len = inner
-            .build_canonical(include_config_and_history)
-            .map_err(|(code, _)| code)?;
+        let mode = if include_config_and_history {
+            CanonicalMode::FullDigest
+        } else {
+            CanonicalMode::StepHash
+        };
+        let len = inner.build_canonical(mode, 0).map_err(|(code, _)| code)?;
         let Some(src) = inner.canonical_buf.get(..len) else {
             return Err(ERR_PANIC);
         };
@@ -478,7 +512,7 @@ where
         }
     }
 
-    fn build_canonical(&mut self, include_config_and_history: bool) -> Result<usize, Failure> {
+    fn build_canonical(&mut self, mode: CanonicalMode, offset: usize) -> Result<usize, Failure> {
         let Inner {
             config,
             now_ns,
@@ -497,6 +531,9 @@ where
             exec_state_scratch,
             ..
         } = self;
+        let Some(buf) = canonical_buf.get_mut(offset..) else {
+            return Err((ERR_PANIC, 0));
+        };
         let inputs = CanonicalInputs {
             config,
             now_ns: *now_ns,
@@ -511,12 +548,185 @@ where
             exec,
         };
         let mut scratch = CanonicalScratch {
-            buf: canonical_buf,
+            buf,
             action_sort: action_sort_scratch,
             feed_token: feed_token_scratch,
             exec_state: exec_state_scratch,
         };
-        write_canonical_sections(&inputs, include_config_and_history, &mut scratch)
+        write_canonical_sections(&inputs, mode, &mut scratch)
+    }
+
+    fn capture(&mut self, port: &mut impl SnapshotPort) -> i32 {
+        match self.state {
+            HandleState::Poisoned => return ERR_POISONED,
+            HandleState::Running => return ERR_REENTRANT,
+            HandleState::Ready | HandleState::Finished => {}
+        }
+        let body_len =
+            match self.build_canonical(CanonicalMode::SnapshotCapture, SNAPSHOT_HEADER_SIZE) {
+                Ok(len) => len,
+                Err((code, _)) => return code,
+            };
+        let body_end = SNAPSHOT_HEADER_SIZE + body_len;
+        let Some(body) = self.canonical_buf.get(SNAPSHOT_HEADER_SIZE..body_end) else {
+            return ERR_PANIC;
+        };
+        let body_sha = sha256(body);
+        if !write_snapshot_header(&mut self.canonical_buf, body_len, &body_sha) {
+            return ERR_PANIC;
+        }
+        let Some(blob) = self.canonical_buf.get(..body_end) else {
+            return ERR_PANIC;
+        };
+        match port.store(blob, self.now_ns, self.processed_event_count) {
+            Ok(()) => OK,
+            Err(_) => ERR_SNAPSHOT_IO,
+        }
+    }
+
+    fn restore(&mut self, blob: &[u8]) -> i32 {
+        if self.state == HandleState::Running {
+            return ERR_REENTRANT;
+        }
+        let Ok(stream_count) = u32::try_from(self.feeds.len()) else {
+            return ERR_PANIC;
+        };
+        // 検証フェーズ（状態を変更しない）。
+        let parsed = match parse_and_validate(blob, &self.config, stream_count) {
+            Ok(p) => p,
+            Err(code) => return code,
+        };
+        for (feed_idx, feed) in self.feeds.iter().enumerate() {
+            let Ok(token) = feed_token_at(parsed.feed_states, feed_idx) else {
+                return ERR_SNAPSHOT_INVALID;
+            };
+            if feed.validate_position(token).is_err() {
+                return ERR_SNAPSHOT_MISMATCH;
+            }
+        }
+        if self.exec.validate_state(parsed.exec_state).is_err() {
+            return ERR_SNAPSHOT_MISMATCH;
+        }
+
+        // 適用フェーズ（以後の失敗はロールバック不能のため Poisoned に遷移する）。
+        for (feed_idx, feed) in self.feeds.iter_mut().enumerate() {
+            let Ok(token) = feed_token_at(parsed.feed_states, feed_idx) else {
+                self.state = HandleState::Poisoned;
+                return ERR_PORT_FAILURE;
+            };
+            if feed.seek(token).is_err() {
+                self.state = HandleState::Poisoned;
+                return ERR_PORT_FAILURE;
+            }
+        }
+        if self.exec.restore_state(parsed.exec_state).is_err() {
+            self.state = HandleState::Poisoned;
+            return ERR_PORT_FAILURE;
+        }
+
+        self.now_ns = parsed.now_ns;
+        self.processed_event_count = parsed.processed_event_count;
+        self.next_action_sequence_id = parsed.next_action_sequence_id;
+        self.last_event_flags = 0;
+        self.rng = Prng::from_state(parsed.prng_state);
+        if self.arena.len() != parsed.state_arena.len() {
+            self.state = HandleState::Poisoned;
+            return ERR_PANIC;
+        }
+        self.arena.copy_from_slice(parsed.state_arena);
+
+        let payload_len = usize::try_from(self.config.payload_record_size).unwrap_or(0);
+        let record_size = EventHeader::SIZE + payload_len;
+
+        // `MERGE_HEADS` を復元する。
+        self.merge.clear();
+        let mut pos = 0usize;
+        for feed_idx in 0..self.feeds.len() {
+            let present = parsed.merge_heads.get(pos).copied().unwrap_or(0);
+            pos += 8;
+            if present == 1 {
+                let Some(rec) = parsed.merge_heads.get(pos..pos + record_size) else {
+                    self.state = HandleState::Poisoned;
+                    return ERR_PANIC;
+                };
+                let Ok(header) = read_event_header(rec) else {
+                    self.state = HandleState::Poisoned;
+                    return ERR_PANIC;
+                };
+                let Some(payload) = rec.get(EventHeader::SIZE..record_size) else {
+                    self.state = HandleState::Poisoned;
+                    return ERR_PANIC;
+                };
+                let Some((dst_header, dst_payload)) = self.merge.slot_mut(feed_idx) else {
+                    self.state = HandleState::Poisoned;
+                    return ERR_PANIC;
+                };
+                *dst_header = header;
+                copy_bytes(dst_payload, payload);
+                self.merge.set_initial_present(feed_idx, true);
+                pos += record_size;
+            } else {
+                self.merge.set_initial_present(feed_idx, false);
+            }
+        }
+
+        // `ACTION_QUEUE` を復元する。
+        self.queue.clear();
+        let action_count = parsed
+            .action_queue
+            .get(0..8)
+            .and_then(|s| s.try_into().ok())
+            .map_or(0usize, |b| {
+                usize::try_from(u64::from_le_bytes(b)).unwrap_or(0)
+            });
+        for i in 0..action_count {
+            let off = 8 + i * record_size;
+            let Some(rec) = parsed.action_queue.get(off..off + record_size) else {
+                self.state = HandleState::Poisoned;
+                return ERR_PANIC;
+            };
+            let Ok(header) = read_event_header(rec) else {
+                self.state = HandleState::Poisoned;
+                return ERR_PANIC;
+            };
+            let Some(payload) = rec.get(EventHeader::SIZE..record_size) else {
+                self.state = HandleState::Poisoned;
+                return ERR_PANIC;
+            };
+            if !self.queue.push_with(header, |dst| copy_bytes(dst, payload)) {
+                self.state = HandleState::Poisoned;
+                return ERR_PANIC;
+            }
+        }
+
+        // `HISTORY_RING` を復元する（最古から最新の順）。
+        self.history.clear();
+        let history_count = parsed
+            .history_ring
+            .get(0..8)
+            .and_then(|s| s.try_into().ok())
+            .map_or(0usize, |b| {
+                usize::try_from(u64::from_le_bytes(b)).unwrap_or(0)
+            });
+        for i in 0..history_count {
+            let off = 8 + i * record_size;
+            let Some(rec) = parsed.history_ring.get(off..off + record_size) else {
+                self.state = HandleState::Poisoned;
+                return ERR_PANIC;
+            };
+            let Ok(header) = read_event_header(rec) else {
+                self.state = HandleState::Poisoned;
+                return ERR_PANIC;
+            };
+            let Some(payload) = rec.get(EventHeader::SIZE..record_size) else {
+                self.state = HandleState::Poisoned;
+                return ERR_PANIC;
+            };
+            self.history.push(header, payload);
+        }
+
+        self.state = HandleState::Ready;
+        OK
     }
 
     /// `StrategyArena` の内側の範囲を、`arena` 全体の添字の範囲にする。範囲外なら `None`。
@@ -656,7 +866,7 @@ where
                     .processed_event_count
                     .is_multiple_of(self.config.hash_interval);
             let state_hash = if hash_present {
-                let len = match self.build_canonical(false) {
+                let len = match self.build_canonical(CanonicalMode::StepHash, 0) {
                     Ok(len) => len,
                     Err(failure) => return self.poison(failure),
                 };

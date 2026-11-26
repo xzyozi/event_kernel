@@ -37,6 +37,11 @@ impl MergeQueue {
         self.present.len()
     }
 
+    pub(crate) fn clear(&mut self) {
+        self.present.fill(false);
+        self.heap_len = 0;
+    }
+
     pub(crate) fn slot_mut(&mut self, feed_idx: usize) -> Option<(&mut EventHeader, &mut [u8])> {
         let header = self.headers.get_mut(feed_idx)?;
         let offset = feed_idx.checked_mul(self.record)?;
