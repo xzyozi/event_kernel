@@ -5,9 +5,9 @@ document_number: "EK-DD-001"
 document_role: "normative"
 ssot_scope: "module_behavior"
 status: "draft"
-version: "0.5"
+version: "0.6"
 created_at: "2026-11-25"
-updated_at: "2026-11-25"
+updated_at: "2026-11-27"
 author: "xzyozi"
 owner: "xzyozi"
 purpose: "カーネルコア（core）のハンドル操作、イベントループ、ポートと戦略の呼び出し契約、状態遷移、エラーコード、機能テスト要件を定義し、実装と境界層の不整合を防ぐため"
@@ -15,7 +15,9 @@ related_documents:
   - "ドキュメントガバナンス（相対パス: ../README.md）"
   - "EK-BD-001 基本設計書（相対パス: ./EK-BD-001_基本設計書.md）"
   - "EK-DS-001 データ構造仕様書（相対パス: ./EK-DS-001_データ構造仕様書.md）"
+  - "EK-IF-001 IF仕様書（相対パス: ./EK-IF-001_IF仕様書.md）"
   - "EK-ENV-001 環境・開発基盤仕様書（相対パス: ../setup/EK-ENV-001_環境・開発基盤仕様書.md）"
+  - "EK-TEST-001 テスト計画・結果報告書（相対パス: ../test/EK-TEST-001_テスト計画・結果報告書.md）"
   - "Deterministic Event Kernel システム要件定義書（相対パス: ../features/deterministic-event-kernel-requirements.md）"
   - "ADR-003 Python FFI境界方式の選定（相対パス: ../adr/003-python-ffi-boundary.md）"
   - "ADR-004 coreのメモリ確保方針（相対パス: ../adr/004-core-memory-allocation.md）"
@@ -30,15 +32,15 @@ related_documents:
 
 ### 1.1 モジュールの目的
 
-`core` クレートが公開する、カーネルのハンドル操作（作成、ステップ実行、連続実行、スナップショット、復元、破棄）と、4つのポート（`ClockPort`、`EventFeedPort`、`ExecutionPort`、`SnapshotPort`）および戦略（`Strategy`）の呼び出し契約を定義する。BD のコンポーネント C-001〜C-011 と C-015 が対象である。
+`core/` ディレクトリ配下のクレート（パッケージ名 `event-kernel-core`、ライブラリ名 `ek_core`。Rust 組み込みの `core` クレートとの衝突を避けるため）が公開する、カーネルのハンドル操作（作成、ステップ実行、連続実行、スナップショット、復元、破棄）と、4つのポート（`ClockPort`、`EventFeedPort`、`ExecutionPort`、`SnapshotPort`）および戦略（`Strategy`）の呼び出し契約を定義する。BD のコンポーネント C-001〜C-011 と C-015 が対象である。
 
 ### 1.2 単一責任範囲 (SSOT) とデータ境界
 
 - **本書の正本範囲**: `module_behavior`。関数の呼び出し順序、制御フロー、状態遷移の条件、エラーコードの値、ポートと戦略の呼び出し契約。
 - **データ境界**: メモリ上のモジュール間の受け渡し（DTO）は本書を正本とする。保存形式（スナップショット、トレースログ、`EventHeader` のバイト配置）は EK-DS-001 を正本とする。
 - **BDとの関係**: 構造、責務、横断方針は EK-BD-001 を正本とし、本書は機能単位へ具体化する。
-- **外部公開契約**: `core-capi` の関数と型、Python の公開 API は、IF/API 仕様書（未作成）を正本とする。本書は `core` の安全な Rust API だけを定義し、公開範囲はすべて「内部」とする。
-- **他文書へ委譲する情報**: 品質ゲートの実行条件と合格基準は EK-ENV-001、テストケースと実行結果はテスト計画・結果報告書（未作成）を正本とする。
+- **外部公開契約**: `core-capi` の関数と型、Python の公開 API は、[EK-IF-001 IF仕様書](./EK-IF-001_IF仕様書.md) を正本とする。本書は `core` の安全な Rust API だけを定義し、公開範囲はすべて「内部」とする。
+- **他文書へ委譲する情報**: 品質ゲートの実行条件と合格基準は EK-ENV-001、テストケースと実行結果は [EK-TEST-001 テスト計画・結果報告書](../test/EK-TEST-001_テスト計画・結果報告書.md) を正本とする。
 - **責務の対象外**: C ABI の関数名とシグネチャ、Arrow 出力の形式、アダプタの内部実装（Parquet の読み込みなど）。
 - **矛盾時の扱い**: 更新日ではなく、該当する `ssot_scope` の正本を更新して整合させる。
 
@@ -91,8 +93,8 @@ related_documents:
 - **機能概要**: 設定を検証し、すべてのバッファを確保して、全外部フィードの先頭イベントを取り込み、`Ready` 状態のハンドルを返す。確保は、この関数に限る（ADR-004）。
 - **事前条件**: 設定が 2.3節の制約を満たす。登録する外部フィードの数が 1以上である。`trace_enabled` が true の場合は、`TraceSink` が登録されている（登録されていなければ `ERR_INVALID_ARGUMENT`）。
 - **事後条件**:
-  - ハンドルは `Ready`。`processed_event_count` は0。論理時刻は、最初のイベントを処理するまで未設定（`i64` の最小値）。PRNG はシードで初期化済み。
-  - 各外部フィードについて、`peek_next_timestamp` を呼び、「なし」でなければ `pop_next` を1回呼んで、先頭イベントをマージキューへ取り込んでいる（ペイロードはコピー済み）。「なし」のフィードの先頭は「なし」とする。
+  - ハンドルは `Ready`。`processed_event_count` は0。論理時刻は、最初のイベントを処理するまで未設定（`i64` の最小値）。PRNG はシードで初期化済み。`trace_enabled` が true の場合は、`TraceSink.write_header` で `TRACE_HEADER`（DS 2.2節）を書き込んでいる。
+  - 各外部フィードについて、`peek_next_timestamp` を呼び、「なし」でなければ `pop_next` を1回呼んで、先頭イベントをマージキューへ取り込んでいる（ペイロードはコピー済み）。取り込んだ先頭イベントが市場イベント（`event_type` 1〜15）以外、登録順と異なる `stream_id`、または `peek_next_timestamp` と一致しない `timestamp_ns` の場合は `ERR_PORT_FAILURE` とする。「なし」のフィードの先頭は「なし」とする。
   - ホットパスで確保が起きない。
 - **失敗時**: 設定の検証に失敗した場合は `ERR_INVALID_ARGUMENT` または `ERR_CAPACITY_EXCEEDED`（2.3節）。`peek_next_timestamp` または `pop_next` が失敗した場合は `ERR_PORT_FAILURE`。どちらも、ハンドルを作らず、確保したメモリを解放する。
 - **タイムアウト / キャンセル**: なし。
@@ -113,7 +115,7 @@ related_documents:
 - **事後条件**: 次のいずれかで終了する。終了コードで区別する。
   - `STEP_FINISHED`: 入力が尽きた。
   - `RUN_LIMIT_REACHED`: `max_events` 個のイベントを処理した。
-  - `RUN_SNAPSHOT_REQUESTED`: `SnapshotTrigger` フラグ付きのイベントを処理した。呼び出し側は `capture` を呼べる。
+  - `RUN_SNAPSHOT_REQUESTED`: `SnapshotTrigger` フラグ付きのイベントを処理した（同一イベントで `max_events` にも達した場合は `RUN_SNAPSHOT_REQUESTED` を優先する）。呼び出し側は `capture` を呼べる。
   - エラーコード: 最初のエラーで停止する。
 - **タイムアウト / キャンセル**: `max_events` が上限になる。
 
@@ -153,7 +155,7 @@ related_documents:
 - **機能概要**: 戦略が使う `StrategyArena` の初期値を、ホストが書き込む。
 - **事前条件**: ハンドルが `Ready` で、`processed_event_count` が0。書き込む範囲が、`StrategyArena` の内側。
 - **事後条件**: 指定した範囲が書き換わる。
-- **失敗時**: 事前条件に反する場合は `ERR_INVALID_ARGUMENT`（状態を変更しない）。
+- **失敗時**: 事前条件に反する場合（`Finished` で呼んだ場合を含む）は `ERR_INVALID_ARGUMENT`、`Poisoned` は `ERR_POISONED`、`Running` は `ERR_REENTRANT`（いずれも状態を変更しない）。
 - **理由**: 最初のステップの後に、ステップ外から書き込むと、状態ハッシュとスナップショットの整合性が崩れる（ADR-003 5.1-7）。初期化は、最初のステップより前に限る。
 
 #### 機能契約（F-012 `read_strategy_arena`）
@@ -205,7 +207,7 @@ related_documents:
 
 - **到達イベントの形式**: `submit_action` は、`ActionArrival` の `EVENT_RECORD`（DS 2.2節）を作る。
   - ヘッダ: `timestamp_ns` は現在時刻 + `latency_ns`、`stream_id` は `0xFFFF_FF00`、`event_type` は16、`flags` は0、`payload_idx` は0。
-  - ペイロード（`payload_record_size` バイト）: EK-DS-001 2.4節の「`ActionArrival` のペイロード」の配置に従い、`action_kind` と `Action.payload` を詰める。配置の正本は DS である。
+  - ペイロード（`payload_record_size` バイト）: EK-DS-001 2.4節の「`ActionArrival` のペイロード」の配置に従い、`action_kind` と `Action.payload` を詰める。`Action.payload` が `payload_record_size - 8` より短い場合は残りを `0` で埋め、長い場合は `ERR_INVALID_ARGUMENT` を返す（状態は変えない）。配置の正本は DS である。
 - `on_arrival` は、この `EVENT_RECORD` を受け取る（2.7節）。
 
 #### F-011: `ArenaWrite`
@@ -254,7 +256,7 @@ related_documents:
 | `processed_event_count` | `u64`    |  必須  |  不可  | 処理済みイベントの累計                          |
 | `now_ns`                | `i64`    |  必須  |  不可  | 現在の論理時刻                                  |
 
-- **異常時の戻り値**: 4.1節のエラーコード。`StepResult` の `status` に入る。
+- **異常時の戻り値**: 4.1節のエラーコード。`StepResult` の `status` に入る。なお `ERR_REENTRANT`（本体を借用できない場合）の返却時は、`processed_event_count` と `now_ns` に `0` を設定する。
 - **再試行可否**: 致命的エラー（`Poisoned` になるもの）は、再試行しない。`restore` で復旧する。回復可能なエラーは、4.1節の列に従う。
 - **相関ID・監査情報**: `processed_event_count` と、トレースレコード（DS 2.2節）。
 
@@ -293,9 +295,9 @@ related_documents:
 
 | 操作              | 呼び出されるとき                                               | 契約                                                                                                                                                                                                                                           |
 | :---------------- | :------------------------------------------------------------- | :--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `on_arrival`      | `ActionArrival` イベントを配送するとき                         | 引数は、到達イベントの `EVENT_RECORD`（2.3節）。内部状態を更新する。結果（`OrderAck`、`Fill`）を、結果バッファへ積んでよい                                                                                                                     |
-| `on_market_event` | 市場イベントを配送するとき（履歴への追加と戦略への通知より前） | 引数は、今の市場イベントの `EVENT_RECORD` と、履歴ウィンドウの読み取り専用ビュー。**今のイベントは、履歴に含まれない**。履歴には、これより前に処理した現在時刻以下の市場イベントだけが入る。待機中のアクションの約定を判定し、結果を積んでよい |
-| `poll_results`    | `on_arrival` と `on_market_event` の直後                       | 積まれた結果を、**生成した順**に返す。同じ入力と状態からは、同じ順序で返さなければならない。`core` は、返された順に `sequence_id` を振る                                                                                                       |
+| `on_arrival`      | `ActionArrival` イベントを配送するとき                         | 引数は、到達イベントの `EVENT_RECORD`（2.3節）と `&mut Prng`。内部状態を更新する。結果（`OrderAck`、`Fill`）を、結果バッファへ積んでよい                                                                                                               |
+| `on_market_event` | 市場イベントを配送するとき（履歴への追加と戦略への通知より前） | 引数は、今の市場イベントの `EVENT_RECORD`、履歴ウィンドウの読み取り専用ビュー、および `&mut Prng`。**今のイベントは、履歴に含まれない**。履歴には、これより前に処理した現在時刻以下の市場イベントだけが入る。待機中のアクションの約定を判定し、結果を積んでよい |
+| `poll_result`     | `on_arrival` と `on_market_event` の直後に結果が尽きるまで繰り返す | 積まれた結果を、**生成した順**に1件ずつ `core` のバッファへ書き出し、`bool`（有無）を返す（動的確保をしないため）。同じ入力と状態からは、同じ順序で返さなければならない。`core` は、返された順に `sequence_id` を振り、`stream_id` を `0xFFFF_FF00`、`payload_idx` を `0` に上書きする |
 | `capture_state`   | `capture` のとき                                               | 内部状態を、決定的な直列化（DS 2.3節）で返す。長さは `exec_state_max_bytes` 以下                                                                                                                                                               |
 | `restore_state`   | `restore` の適用フェーズ                                       | 内部状態を、バイト列だけから全上書きする。既存の状態を読まない                                                                                                                                                                                 |
 | `validate_state`  | `restore` の検証フェーズ                                       | バイト列が復元できるかを検査する。状態を変更しない                                                                                                                                                                                             |
@@ -322,9 +324,10 @@ related_documents:
 
 #### `TraceSink`
 
-| 操作            | 契約                                                                                                                                                                                              |
-| :-------------- | :------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `write(record)` | トレースレコード（DS 2.2節の `TRACE_RECORD`）を1件出力する。失敗したら、`ERR_PORT_FAILURE` を返し、ハンドルは `Poisoned` になる。トレースが欠けた実行の結果は、監査（NFR-05）に使えないためである |
+| 操作                   | 契約                                                                                                                                                                                              |
+| :--------------------- | :------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `write_header(header)` | 初期化時（`trace_enabled` が true のとき）に `TRACE_HEADER`（DS 2.2節）を書き込む。失敗したら `ERR_PORT_FAILURE` を返し、ハンドルを作らない                                                     |
+| `write(record)`        | トレースレコード（DS 2.2節の `TRACE_RECORD`）を1件出力する。失敗したら、`ERR_PORT_FAILURE` を返し、ハンドルは `Poisoned` になる。トレースが欠けた実行の結果は、監査（NFR-05）に使えないためである |
 
 ### 2.8 戦略インターフェース（F-010 `Strategy`）
 
@@ -398,7 +401,7 @@ flowchart TD
 |   5   | イベントの種類に応じて、`ExecutionPort` を呼ぶ。市場イベントは `on_market_event`、`ActionArrival` は `on_arrival`。`OrderAck` と `Fill` は呼ばない。呼び出しの直後に `poll_results` で結果を受け取り、1件ずつ検査する（`event_type` が `OrderAck` または `Fill`、時刻が現在時刻以上）。検査を通った結果を、返された順にアクションキューへ入れる                                                                                                                                                                                                                                                                                                                               | 検査に違反した結果の時刻は `ERR_CAUSALITY_VIOLATION`、`event_type` は `ERR_PORT_FAILURE`。キューに入らなければ `ERR_RESULT_OVERFLOW`。いずれも `Poisoned` |
 |   6   | 市場イベントだけを、履歴ウィンドウへ追加する（満杯なら、最古を上書きする）。`ActionArrival`、`OrderAck`、`Fill` は追加しない                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  | なし                                                                                                                                                      |
 |   7   | 市場イベント、`OrderAck`、`Fill` について、戦略の `on_event` を呼ぶ（2.8節）。戦略は、このコールバック中に F-004 を呼べる。コールバックの終了時に、ビューを無効化する（`ViewGuard`）。`ActionArrival` では、呼ばない                                                                                                                                                                                                                                                                                                                                                                                                                                                          | 戦略が1以上を返した場合は `ERR_STRATEGY_FAILURE`（`detail` に値）。`Poisoned`                                                                             |
-|   8   | **先頭の補充と検証**: 手順2で選んだイベントが外部フィードのものなら、そのフィードに `peek_next_timestamp` を呼び、「なし」でなければ `pop_next` で次のイベントを取り込み、先頭を更新する（ペイロードをコピーする）。システムストリームのイベントなら、何もしない。取り込んだイベントを、今のイベント（同じストリームの直前のイベント）と比べる。時刻が今のイベントより小さければ `ERR_CAUSALITY_VIOLATION`。時刻が同じで `sequence_id` が増えていなければ `ERR_SEQUENCE_VIOLATION`。いずれも、取り込んだイベントを処理せずに `Poisoned` へ遷移する。今のイベントの処理は、手順7までに終わっており、`processed_event_count` に数えている。このステップのトレースは出力されない | `ERR_CAUSALITY_VIOLATION`、`ERR_SEQUENCE_VIOLATION`、`ERR_PORT_FAILURE`。いずれも `Poisoned`                                                              |
+|   8   | **先頭の補充と検証**: 手順2で選んだイベントが外部フィードのものなら、そのフィードに `peek_next_timestamp` を呼び、「なし」でなければ `pop_next` で次のイベントを取り込み、先頭を更新する（ペイロードをコピーする）。システムストリームのイベントなら、何もしない。取り込んだイベントを検査し、`peek_next_timestamp` との時刻不一致、登録順と異なる `stream_id`、または市場イベント（`event_type` 1〜15）以外の場合は `ERR_PORT_FAILURE` とする。また、今のイベント（同じストリームの直前のイベント）と比べて時刻が小さければ `ERR_CAUSALITY_VIOLATION`、時刻が同じで `sequence_id` が増えていなければ `ERR_SEQUENCE_VIOLATION` とする。いずれも、取り込んだイベントを処理せずに `Poisoned` へ遷移する。今のイベントの処理は、手順7までに終わっており、`processed_event_count` に数えている。このステップのトレースは出力されない | `ERR_CAUSALITY_VIOLATION`、`ERR_SEQUENCE_VIOLATION`、`ERR_PORT_FAILURE`。いずれも `Poisoned`                                                              |
 |   9   | `trace_enabled` なら、トレースレコードを出力する。`processed_event_count`（処理後の値）が `hash_interval` の倍数なら、手順8の補充と検証が済んだ後の状態（`capture` が保存する状態と同じ）から、状態ハッシュを計算して付ける。`hash_interval` が0なら、計算しない                                                                                                                                                                                                                                                                                                                                                                                                              | 出力の失敗は `ERR_PORT_FAILURE`。`Poisoned`                                                                                                               |
 |  10   | `Ready` に戻り、`OK` を返す                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   | なし                                                                                                                                                      |
 
@@ -431,6 +434,7 @@ flowchart TD
 | `Running`  | `submit_action`                                                                              | 成功、`ERR_QUEUE_FULL`、`ERR_INVALID_ARGUMENT`                   | `Running`                                | 戦略のコールバック中だけ |
 | `Finished` | `step`、`run`                                                                                | `STEP_FINISHED`                                                  | `Finished`                               | 状態を変更しない         |
 | `Finished` | `capture`、`read_strategy_arena`                                                             | 成功または回復可能なエラー                                       | `Finished`                               |                          |
+| `Finished` | `init_strategy_arena`                                                                        | `ERR_INVALID_ARGUMENT`                                           | `Finished`                               | 表にない操作・条件違反   |
 | `Finished` | `restore`                                                                                    | 成功                                                             | `Ready`                                  |                          |
 | `Finished` | `restore`                                                                                    | 適用フェーズの失敗                                               | `Poisoned`                               |                          |
 | `Finished` | `destroy`                                                                                    | 成功                                                             | `Destroyed`                              |                          |
@@ -498,7 +502,7 @@ sequenceDiagram
 | `ERR_RESULT_OVERFLOW`      |  -12  | 致命的                          | `ExecutionPort` の結果が、アクションキューに入らない                                                                                                        | 再試行しない                   | `Poisoned`                                      | `action_queue_capacity` を増やす                                         | 同上                                       |
 | `ERR_STRATEGY_FAILURE`     |  -13  | 致命的                          | 戦略が1以上の `StrategyStatus` を返した。Python 戦略の例外を含む                                                                                            | 再試行しない                   | `Poisoned`                                      | 戦略を直す。`detail` に戦略の値が入る                                    | 同上                                       |
 | `ERR_SNAPSHOT_IO`          |  -14  | 回復可能                        | `SnapshotPort` の `store` が失敗した（`load` の失敗は、境界層が返す）                                                                                       | 保存先が回復すれば安全         | 変化なし                                        | 保存先を確認する                                                         | 状態を変更しない                           |
-| `ERR_PANIC`                |  -99  | 致命的                          | 境界層がパニックを捕捉した（ADR-003 5.1-4）                                                                                                                 | `restore` の後は安全           | `Poisoned`                                      | 不具合として報告する                                                     | 同上                                       |
+| `ERR_PANIC`                |  -99  | 致命的                          | 境界層がパニックを捕捉した（ADR-003 5.1-4）。`core` 内の回復不能な内部不変条件違反（先頭取り出し失敗等）にも用いる                                                                        | `restore` の後は安全           | `Poisoned`                                      | 不具合として報告する                                                     | 同上                                       |
 
 - **再試行上限**: 致命的エラーは、再試行しない。`core` は、内部でリトライを持たない（BD 3.2節）。
 - **未確定**: `ExecutionPort` の結果が、キューの空きを使い切らないようにする予約方式（`action_queue_capacity` のうち、結果用に確保する量）は、決まっていない（5.3節）。現在は、溢れた場合を致命的エラー `ERR_RESULT_OVERFLOW` とする。
@@ -509,32 +513,32 @@ sequenceDiagram
 
 ### 5.1 機能テスト要件一覧
 
-| 要件ID | 対象機能ID   | 保証すべき振る舞い・条件                                                                                                                                                                                                                                                                                                                                                                   | 検証観点         | 対応テストケース       |
-| :----- | :----------- | :----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | :--------------- | :--------------------- |
-| TR-001 | F-001        | 1つのフィールドが制約を満たさない場合と、フィードが0個の場合、`trace_enabled` が true で `TraceSink` がない場合に `ERR_INVALID_ARGUMENT` を返す。個々の値は正しいが確保量が `max_total_bytes` を超える場合、計算がオーバーフローする場合、`stream_count` が上限を超える場合に `ERR_CAPACITY_EXCEEDED` を返す。どちらもハンドルを作らない。成功時は `Ready` で、`processed_event_count` が0 | 正常、境界、異常 | テスト計画で割り当てる |
-| TR-002 | F-001、F-002 | `create` の完了後、`step` と `run` の間は、ヒープの確保も解放も起きない（AC-05）                                                                                                                                                                                                                                                                                                           | 正常             | 同上                   |
-| TR-003 | F-002        | 同一時刻のイベントが、`(timestamp_ns, stream_id, sequence_id)` の昇順で配送される。システムストリームのイベントは、外部フィードの後（AC-02）                                                                                                                                                                                                                                               | 正常、境界       | 同上                   |
-| TR-004 | F-002        | 同一ストリームで時刻が逆行するイベントを入力すると、逆行したイベントを処理せず `ERR_CAUSALITY_VIOLATION` を返し、`Poisoned` になる（AC-01）。エラーは、直前のイベントを処理したステップが返し、直前のイベントは処理済みで `processed_event_count` に数える                                                                                                                                 | 異常             | 同上                   |
-| TR-005 | F-002        | 同一ストリームで、時刻が同じで `sequence_id` が増加しない入力に、`ERR_SEQUENCE_VIOLATION` を返し、`Poisoned` になる。エラーの返し方と処理済みイベントの扱いは、TR-004 と同じ                                                                                                                                                                                                               | 異常             | 同上                   |
-| TR-006 | F-002、F-009 | 市場イベントの処理で、`ExecutionPort` の `on_market_event` が、戦略の `on_event` より先に呼ばれる。`on_market_event` へ渡す履歴は、今のイベントを含まない                                                                                                                                                                                                                                  | 正常             | 同上                   |
-| TR-007 | F-004、F-009 | アクションの結果が、提出時刻より後の時刻にだけ現れる。`latency_ns` が0以下なら `ERR_INVALID_ARGUMENT`（AC-02）                                                                                                                                                                                                                                                                             | 正常、境界、異常 | 同上                   |
-| TR-008 | F-004        | キューが満杯のとき `ERR_QUEUE_FULL` を返し、状態ハッシュが変化せず、`Poisoned` にならない（AC-08）                                                                                                                                                                                                                                                                                         | 境界             | 同上                   |
-| TR-009 | F-002、F-010 | 戦略が1以上を返すと、`ERR_STRATEGY_FAILURE` を返し、`detail` に戦略の値が入り、`Poisoned` になる                                                                                                                                                                                                                                                                                           | 異常             | 同上                   |
-| TR-010 | F-005、F-006 | `capture` の後に、パラメータを変えて実行し、`restore` して同じ設定で再実行すると、全セクションの SHA-256 が元の実行とビット単位で一致する（AC-03）。`HISTORY_RING` を含む。`hash_interval` と `trace_enabled` が同じなら、トレースも一致する                                                                                                                                               | 正常             | 同上                   |
-| TR-011 | F-005        | 位置を戻せないフィード、または最大長を超える状態があると、`ERR_SNAPSHOT_UNSUPPORTED` を返し、状態を変更しない                                                                                                                                                                                                                                                                              | 異常             | 同上                   |
-| TR-012 | F-006        | 検証フェーズの失敗（形式、設定の不一致）で、状態もハンドルの状態も変わらない。適用フェーズの失敗で `Poisoned` になる                                                                                                                                                                                                                                                                       | 異常             | 同上                   |
-| TR-013 | F-006        | `Poisoned` のハンドルに `restore` が成功すると、`Ready` に戻り、以後の `step` の結果が、`restore` 元の状態から実行した場合と一致する                                                                                                                                                                                                                                                       | 正常             | 同上                   |
-| TR-014 | F-002        | コールバックからの再入を試す単体テストで、`step`、`run`、`capture`、`restore`、`destroy` を `Running` 中に呼ぶと `ERR_REENTRANT` を返し、状態を変更しない                                                                                                                                                                                                                                  | 異常             | 同上                   |
-| TR-015 | F-003        | `run` が、入力の終端、`max_events`、`SnapshotTrigger` で止まり、それぞれ異なる終了コードを返す。`max_events` が0なら無制限                                                                                                                                                                                                                                                                 | 正常、境界       | 同上                   |
-| TR-016 | F-002、F-005 | 同じ入力、同じシード、同じ設定で、全セクションの SHA-256 とトレースログのハッシュが一致する（AC-04、AC-07）                                                                                                                                                                                                                                                                                | 正常             | 同上                   |
-| TR-017 | F-001、F-002 | PRNG が、同じシードから同じ系列を出し、状態が `CLOCK` と並んで保存、復元される（FR-05-1）                                                                                                                                                                                                                                                                                                  | 正常             | 同上                   |
-| TR-018 | F-001        | `create` が全外部フィードの先頭を取り込む。取り込みが失敗した場合は `ERR_PORT_FAILURE` を返し、ハンドルを作らない                                                                                                                                                                                                                                                                          | 正常、異常       | 同上                   |
-| TR-019 | F-002、F-009 | `ExecutionPort` の結果の時刻が現在時刻より小さい場合は `ERR_CAUSALITY_VIOLATION`、`event_type` が不正な場合は `ERR_PORT_FAILURE` を返し、`Poisoned` になる。結果は、返された順に `sequence_id` が振られる                                                                                                                                                                                  | 異常、正常       | 同上                   |
-| TR-020 | F-002        | 履歴ウィンドウに入るのは、市場イベントだけである。`ActionArrival`、`OrderAck`、`Fill` は入らない。戦略へ通知されるのは、市場イベント、`OrderAck`、`Fill` で、`ActionArrival` は通知されない                                                                                                                                                                                                | 正常             | 同上                   |
-| TR-021 | F-002        | `hash_interval` が N のとき、`processed_event_count` が N の倍数になるステップだけ、ハッシュが付く。ハッシュは、先頭の補充（手順8）の後の状態から計算し、その状態を `capture` したバイト列から DS 2.5節の方法で計算した値と一致する。`restore` の前後で、ハッシュを付けるステップが変わらない                                                                                              | 正常、境界       | 同上                   |
-| TR-022 | F-011、F-012 | `init_strategy_arena` は、`Ready` で `processed_event_count` が0のときだけ成功する。それ以外は `ERR_INVALID_ARGUMENT`。`read_strategy_arena` は、呼び出し側のバッファへコピーし、状態を変えず、確保しない                                                                                                                                                                                  | 正常、境界、異常 | 同上                   |
-| TR-023 | F-005、F-006 | `SnapshotPort` の `store` が失敗すると `ERR_SNAPSHOT_IO` を返し、状態もハンドルの状態も変えない。`load` の失敗は境界層の機能で、IF/API 仕様書の要件とする                                                                                                                                                                                                                                  | 異常             | 同上                   |
-| TR-024 | F-004        | 現在時刻 + `latency_ns` が `i64` の範囲を超える場合に `ERR_INVALID_ARGUMENT` を返し、状態を変えない。`ClockPort` の `advance_to` が現在時刻より小さい値を拒否する                                                                                                                                                                                                                          | 正常、境界、異常 | 同上                   |
+| 要件ID | 対象機能ID   | 保証すべき振る舞い・条件                                                                                                                                                                                                                                                                                                                                                                   | 検証観点         | 対応テストケース          |
+| :----- | :----------- | :----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | :--------------- | :------------------------ |
+| TR-001 | F-001        | 1つのフィールドが制約を満たさない場合と、フィードが0個の場合、`trace_enabled` が true で `TraceSink` がない場合に `ERR_INVALID_ARGUMENT` を返す。個々の値は正しいが確保量が `max_total_bytes` を超える場合、計算がオーバーフローする場合、`stream_count` が上限を超える場合に `ERR_CAPACITY_EXCEEDED` を返す。どちらもハンドルを作らない。成功時は `Ready` で、`processed_event_count` が0 | 正常、境界、異常 | `TC-001` (`EK-TEST-001`)  |
+| TR-002 | F-001、F-002 | `create` の完了後、`step` と `run` の間は、ヒープの確保も解放も起きない（AC-05）                                                                                                                                                                                                                                                                                                           | 正常             | `TC-002` (`EK-TEST-001`)  |
+| TR-003 | F-002        | 同一時刻のイベントが、`(timestamp_ns, stream_id, sequence_id)` の昇順で配送される。システムストリームのイベントは、外部フィードの後（AC-02）                                                                                                                                                                                                                                               | 正常、境界       | `TC-003` (`EK-TEST-001`)  |
+| TR-004 | F-002        | 同一ストリームで時刻が逆行するイベントを入力すると、逆行したイベントを処理せず `ERR_CAUSALITY_VIOLATION` を返し、`Poisoned` になる（AC-01）。エラーは、直前のイベントを処理したステップが返し、直前のイベントは処理済みで `processed_event_count` に数える                                                                                                                                 | 異常             | `TC-004` (`EK-TEST-001`)  |
+| TR-005 | F-002        | 同一ストリームで、時刻が同じで `sequence_id` が増加しない入力に、`ERR_SEQUENCE_VIOLATION` を返し、`Poisoned` になる。エラーの返し方と処理済みイベントの扱いは、TR-004 と同じ                                                                                                                                                                                                               | 異常             | `TC-005` (`EK-TEST-001`)  |
+| TR-006 | F-002、F-009 | 市場イベントの処理で、`ExecutionPort` の `on_market_event` が、戦略の `on_event` より先に呼ばれる。`on_market_event` へ渡す履歴は、今のイベントを含まない                                                                                                                                                                                                                                  | 正常             | `TC-006` (`EK-TEST-001`)  |
+| TR-007 | F-004、F-009 | アクションの結果が、提出時刻より後の時刻にだけ現れる。`latency_ns` が0以下なら `ERR_INVALID_ARGUMENT`（AC-02）                                                                                                                                                                                                                                                                             | 正常、境界、異常 | `TC-007` (`EK-TEST-001`)  |
+| TR-008 | F-004        | キューが満杯のとき `ERR_QUEUE_FULL` を返し、状態ハッシュが変化せず、`Poisoned` にならない（AC-08）                                                                                                                                                                                                                                                                                         | 境界             | `TC-008` (`EK-TEST-001`)  |
+| TR-009 | F-002、F-010 | 戦略が1以上を返すと、`ERR_STRATEGY_FAILURE` を返し、`detail` に戦略の値が入り、`Poisoned` になる                                                                                                                                                                                                                                                                                           | 異常             | `TC-009` (`EK-TEST-001`)  |
+| TR-010 | F-005、F-006 | `capture` の後に、パラメータを変えて実行し、`restore` して同じ設定で再実行すると、全セクションの SHA-256 が元の実行とビット単位で一致する（AC-03）。`HISTORY_RING` を含む。`hash_interval` と `trace_enabled` が同じなら、トレースも一致する                                                                                                                                               | 正常             | `TC-010` (`EK-TEST-001`)  |
+| TR-011 | F-005        | 位置を戻せないフィード、または最大長を超える状態があると、`ERR_SNAPSHOT_UNSUPPORTED` を返し、状態を変更しない                                                                                                                                                                                                                                                                              | 異常             | `TC-011` (`EK-TEST-001`)  |
+| TR-012 | F-006        | 検証フェーズの失敗（形式、設定の不一致）で、状態もハンドルの状態も変わらない。適用フェーズの失敗で `Poisoned` になる                                                                                                                                                                                                                                                                       | 異常             | `TC-012` (`EK-TEST-001`)  |
+| TR-013 | F-006        | `Poisoned` のハンドルに `restore` が成功すると、`Ready` に戻り、以後の `step` の結果が、`restore` 元の状態から実行した場合と一致する                                                                                                                                                                                                                                                       | 正常             | `TC-012` (`EK-TEST-001`)  |
+| TR-014 | F-002        | コールバックからの再入を試す単体テストで、`step`、`run`、`capture`、`restore`、`destroy` を `Running` 中に呼ぶと `ERR_REENTRANT` を返し、状態を変更しない                                                                                                                                                                                                                                  | 異常             | `TC-013` (`EK-TEST-001`)  |
+| TR-015 | F-003        | `run` が、入力の終端、`max_events`、`SnapshotTrigger` で止まり、それぞれ異なる終了コードを返す。`max_events` が0なら無制限                                                                                                                                                                                                                                                                 | 正常、境界       | `TC-014` (`EK-TEST-001`)  |
+| TR-016 | F-002、F-005 | 同じ入力、同じシード、同じ設定で、全セクションの SHA-256 とトレースログのハッシュが一致する（AC-04、AC-07）                                                                                                                                                                                                                                                                                | 正常             | `TC-015` (`EK-TEST-001`)  |
+| TR-017 | F-001、F-002 | PRNG が、同じシードから同じ系列を出し、状態が `CLOCK` と並んで保存、復元される（FR-05-1）                                                                                                                                                                                                                                                                                                  | 正常             | `TC-010` (`EK-TEST-001`)  |
+| TR-018 | F-001        | `create` が全外部フィードの先頭を取り込む。取り込みが失敗した場合は `ERR_PORT_FAILURE` を返し、ハンドルを作らない                                                                                                                                                                                                                                                                          | 正常、異常       | `TC-001` (`EK-TEST-001`)  |
+| TR-019 | F-002、F-009 | `ExecutionPort` の結果の時刻が現在時刻より小さい場合は `ERR_CAUSALITY_VIOLATION`、`event_type` が不正な場合は `ERR_PORT_FAILURE` を返し、`Poisoned` になる。結果は、返された順に `sequence_id` が振られる                                                                                                                                                                                  | 異常、正常       | `TC-009` (`EK-TEST-001`)  |
+| TR-020 | F-002        | 履歴ウィンドウに入るのは、市場イベントだけである。`ActionArrival`、`OrderAck`、`Fill` は入らない。戦略へ通知されるのは、市場イベント、`OrderAck`、`Fill` で、`ActionArrival` は通知されない                                                                                                                                                                                                | 正常             | `TC-006` (`EK-TEST-001`)  |
+| TR-021 | F-002        | `hash_interval` が N のとき、`processed_event_count` が N の倍数になるステップだけ、ハッシュが付く。ハッシュは、先頭の補充（手順8）の後の状態から計算し、その状態を `capture` したバイト列から DS 2.5節の方法で計算した値と一致する。`restore` の前後で、ハッシュを付けるステップが変わらない                                                                                              | 正常、境界       | `TC-010` (`EK-TEST-001`)  |
+| TR-022 | F-011、F-012 | `init_strategy_arena` は、`Ready` で `processed_event_count` が0のときだけ成功する。それ以外は `ERR_INVALID_ARGUMENT`。`read_strategy_arena` は、呼び出し側のバッファへコピーし、状態を変えず、確保しない                                                                                                                                                                                  | 正常、境界、異常 | `TC-026` (`EK-TEST-001`)  |
+| TR-023 | F-005、F-006 | `SnapshotPort` の `store` が失敗すると `ERR_SNAPSHOT_IO` を返し、状態もハンドルの状態も変えない。`load` の失敗は境界層の機能で、IF/API 仕様書の要件とする                                                                                                                                                                                                                                  | 異常             | `TC-011` (`EK-TEST-001`)  |
+| TR-024 | F-004        | 現在時刻 + `latency_ns` が `i64` の範囲を超える場合に `ERR_INVALID_ARGUMENT` を返し、状態を変えない。`ClockPort` の `advance_to` が現在時刻より小さい値を拒否する                                                                                                                                                                                                                          | 正常、境界、異常 | `TC-007` (`EK-TEST-001`)  |
 
 ### 5.2 適用する品質ゲート
 
@@ -548,10 +552,10 @@ sequenceDiagram
 | :------------------------------------ | :------------------------------------------------------------------------------------------------------------------------- | :------------------------------------------- |
 | 結果用の予約                          | `ExecutionPort` の結果が、アクションキューの空きを使い切る場合の予約方式                                                   | 本書の次の版                                 |
 | ペイロードのコピーの性能              | 手順8のコピーが NFR-03 に与える影響                                                                                        | ベンチマーク（QG-008）                       |
-| 入力の `payload_idx`                  | `pop_next` がコピーするため、`core` は `payload_idx` を使わない。アダプタが使う場合の規約                                  | IF/API 仕様書                                |
-| 状態ハッシュのアルゴリズム（OPEN-05） | ステップごとのハッシュの方式（候補は XXH3-64）。ベンチマークで決める                                                       | ベンチマーク                                 |
-| `state_digest` の定義                 | 保存を伴わない最終状態ハッシュの操作の詳細                                                                                 | IF/API 仕様書                                |
-| バッチ単位のコールバック              | ADR-003 5.1-2 のバッチ単位の呼び出しを、`Strategy` にどう載せるか。`core` の契約は、イベント単位の `on_event` を基準とする | IF/API 仕様書（V-01 の計測結果を見て決める） |
+| 入力の `payload_idx`                  | 【解決済み】[EK-IF-001 2.2節](./EK-IF-001_IF仕様書.md) で定義済み（アダプタ設定可、内部・保存時は 0 扱い）                   | EK-IF-001                                    |
+| 状態ハッシュのアルゴリズム（OPEN-05） | 【解決済み】XXH3-64（シード0、既定シークレット）に確定し、`core/` へ実装・ベンチマーク検証済み                               | EK-DS-001                                    |
+| `state_digest` の定義                 | 【解決済み】[EK-IF-001 4.1.1節](./EK-IF-001_IF仕様書.md) および DS 2.5節に従い `core`（`Kernel::state_digest`）を実装済み      | EK-IF-001                                    |
+| バッチ単位のコールバック              | ADR-003 5.1-2 のバッチ単位の呼び出しを、`Strategy` にどう載せるか。`core` の契約は、イベント単位の `on_event` を基準とする   | EK-IF-001 4.2節（V-01 計測後に確定）         |
 | 戦略への通知の購読                    | 戦略が、通知を受ける `event_type` を選べるようにするか（現在は、市場イベント、`OrderAck`、`Fill` のすべて）                | 本書の次の版                                 |
 | `event_type` ごとのペイロード         | `ActionArrival` 以外のペイロードの配置                                                                                     | DS の次の版                                  |
 
@@ -568,7 +572,7 @@ sequenceDiagram
 - [x] 初期状態、終端状態、未定義イベント、状態不変条件を記入した。
 - [x] エラーコード、再試行安全条件、利用者・運用者対応、データ保持契約を記入した。
 - [x] 機能テスト要件ごとに、検証観点を記入した。
-- [ ] 機能テスト要件ごとに、テスト計画・結果報告書の対応ケース ID を記入した（テスト計画は未作成）。
+- [x] 機能テスト要件ごとに、テスト計画・結果報告書の対応ケース ID を記入した（[EK-TEST-001](../test/EK-TEST-001_テスト計画・結果報告書.md) の `TC-001`〜`TC-016` / `TC-026` に対応付け済み）。
 - [x] 品質ゲートは、環境・開発基盤仕様書のゲート ID を参照し、実行コマンドと合格基準を再掲していない。
 - [x] Mermaid のサンプルの状態名、エラー名、閾値と、未置換の `[ ... ]` が残っていない。
 
@@ -583,3 +587,4 @@ sequenceDiagram
 | Rev.0.3 | 2026-11-25 | xzyozi | 再レビュー指摘を反映。`ActionArrival` のペイロード配置を DS へ移した。`read_strategy_arena` を呼び出し側のバッファへの書き込みにした。`Context.history` の説明、再入検出の根拠（実行時の検出）、`peek_next_timestamp` の使用箇所、位置トークンの時点を明確化。`sequence_id` の検証を取り込み時に変更した。`ClockPort`、`SnapshotPort`、`TraceSink` の契約と `ERR_SNAPSHOT_IO` を追加。結果の時刻と提出時刻の関係、`latency_ns` のオーバーフロー、`Finished` での `restore` 検証失敗を追記。               |
 | Rev.0.4 | 2026-11-25 | xzyozi | 再レビュー指摘を反映。先頭の補充と検証を手順9へ移し、時刻の逆行は `ERR_CAUSALITY_VIOLATION`、連番の違反は `ERR_SEQUENCE_VIOLATION` と分けた（AC-01）。違反が見つかるステップと、処理済みイベントの扱いを明記（TR-004、TR-005）。`restore` がバイト列を受け取り、`load` は境界層が呼ぶことを明記。`restore` が `ClockPort` を経由しない例外を明記。`TraceSink` の登録条件と、F-002、F-005 の呼び出し先とエラーを補完。                                                                                     |
 | Rev.0.5 | 2026-11-25 | xzyozi | 再レビュー指摘を反映。先頭の補充と検証を手順8（トレースの前）へ移し、状態ハッシュを補充後の状態（`capture` が保存する状態）から計算するようにした。違反したステップのトレースは出力しない。手順3と手順4の検査の重複を整理し、フロー図の経路を手順表に合わせた。TR-023 を `store` に絞り、`run_id` をポートの実装が持つことを明記。                                                                                                                                                                        |
+| Rev.0.6 | 2026-11-27 | xzyozi | `core/` 実装（`v0.0.1`）で判明した詳細補完（パッケージ名 `event-kernel-core`、`poll_result`、ポート戻り値の `stream_id`/`payload_idx` 上書き、`ExecutionPort` への `&mut Prng`、`TraceSink::write_header`、優先順位、`Action.payload` 詰め・長さ超過、`Finished` 時 `init_strategy_arena`、`ERR_REENTRANT` 戻り値等）および `EK-IF-001` / `EK-TEST-001` 参照・`TC-ID` 対応を反映した。 |

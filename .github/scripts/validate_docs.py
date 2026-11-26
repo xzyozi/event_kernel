@@ -62,6 +62,9 @@ KNOWN_TYPES = NUMBER_REQUIRED_TYPES | {
     "issue_record",
     "environment_setup_procedure",
     "document_governance",
+    "requirements_specification",
+    "analysis",
+    "directory_guide",
 }
 
 DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
@@ -201,6 +204,9 @@ def validate_file(path: Path, result: Result) -> None:
         result.error(path, str(exc))
         return
     if data is None:
+        if path.as_posix() == "README.md":
+            # ルート README.md は docs/README.md §1 により Frontmatter を必須としない。
+            return
         result.warn(path, "Frontmatter がありません（既存文書は更新時に適用）")
         return
 

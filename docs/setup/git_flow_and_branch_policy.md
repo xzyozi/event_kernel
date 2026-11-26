@@ -1,3 +1,20 @@
+---
+title: "Git Flow 運用規約 ＆ ブランチ自動管理ガイド"
+document_type: "directory_guide"
+document_role: "procedure"
+ssot_scope: "git_workflow"
+status: "approved"
+version: "1.0"
+created_at: "2026-10-02"
+updated_at: "2026-11-27"
+author: "xzyozi"
+owner: "xzyozi"
+purpose: "プロジェクトの Git Flow ブランチ戦略および PR マージ後の自動ブランチ削除運用を定義するため"
+related_documents:
+  - "ドキュメントガバナンス（相対パス: ../README.md）"
+  - "EK-ENV-001 環境・開発基盤仕様書（相対パス: ./EK-ENV-001_環境・開発基盤仕様書.md）"
+---
+
 # Git Flow 運用規約 ＆ ブランチ自動管理ガイド
 
 本ドキュメントは、プロジェクトにおける **Git Flow 運用ルール**、および **GitHub / CI/CD / ローカル Git** を活用したブランチの自動クリーンアップ・管理仕様を定義します。

@@ -1,3 +1,23 @@
+---
+title: "プロジェクトセットアップガイド (Hatch版・旧テンプレート・廃止)"
+document_type: "environment_setup_procedure"
+document_role: "reference"
+ssot_scope: "environment"
+status: "deprecated"
+version: "1.0"
+created_at: "2026-10-02"
+updated_at: "2026-11-27"
+author: "xzyozi"
+owner: "xzyozi"
+purpose: "テンプレート由来の旧 Hatch 手順を記録として残し、現行の EK-SETUP-001 / python_setup.md へ誘導するため"
+related_documents:
+  - "ドキュメントガバナンス（相対パス: ../README.md）"
+  - "EK-SETUP-001 環境構築手順書（相対パス: ./EK-SETUP-001_環境構築手順書.md）"
+  - "Python プロジェクト環境構築手順書 (uv版)（相対パス: ./python_setup.md）"
+---
+
+> **非推奨（Deprecated）**: 本ファイルは初期テンプレート由来の Hatch 手順です。本プロジェクトの環境構築は [EK-SETUP-001 環境構築手順書](./EK-SETUP-001_環境構築手順書.md) および [python_setup.md](./python_setup.md) を正本としています。
+
 # プロジェクトセットアップガイド (Hatch版)
 
 このプロジェクトは、依存関係と開発環境の管理に [Hatch](https://hatch.pypa.io/latest/) を使用します。プロジェクトルートにある `pyproject.toml` ファイルが、従来の `setup.py` の役割を置き換えます。

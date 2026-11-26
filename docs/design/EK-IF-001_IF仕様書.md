@@ -5,17 +5,19 @@ document_number: "EK-IF-001"
 document_role: "normative"
 ssot_scope: "external_interface"
 status: "draft"
-version: "0.1"
+version: "0.2"
 created_at: "2026-11-26"
-updated_at: "2026-11-26"
+updated_at: "2026-11-27"
 author: "xzyozi"
 owner: "xzyozi"
 purpose: "core-capiのC ABI契約、bindings/pythonの公開Python API、Arrow PyCapsule結果出力形式とハッシュ契約、外部境界の寿命・例外変換規則を定義し、Rustコアと外部ホスト層の不整合を防ぐため"
 related_documents:
   - "ドキュメントガバナンス（相対パス: ../README.md）"
   - "EK-BD-001 基本設計書（相対パス: ./EK-BD-001_基本設計書.md）"
+  - "EK-DD-001 カーネルコア詳細設計書（相対パス: ./EK-DD-001_カーネルコア詳細設計書.md）"
   - "EK-DS-001 データ構造仕様書（相対パス: ./EK-DS-001_データ構造仕様書.md）"
   - "EK-ENV-001 環境・開発基盤仕様書（相対パス: ../setup/EK-ENV-001_環境・開発基盤仕様書.md）"
+  - "EK-TEST-001 テスト計画・結果報告書（相対パス: ../test/EK-TEST-001_テスト計画・結果報告書.md）"
   - "Deterministic Event Kernel システム要件定義書（相対パス: ../features/deterministic-event-kernel-requirements.md）"
   - "ADR-003 Python FFI境界方式の選定（相対パス: ../adr/003-python-ffi-boundary.md）"
   - "ADR-004 coreのメモリ確保方針（相対パス: ../adr/004-core-memory-allocation.md）"
@@ -24,7 +26,7 @@ related_documents:
 # IF/API仕様書（外部インターフェース契約）
 **`core-capi` C ABI・`bindings/python` Python API・Arrow ゼロコピー出力契約**
 
-詳細設計書（`EK-DD-001`）は別ブランチ（`docs/detailed-design`）でドラフト作成中のため、本書から DD への相対リンクは DD のマージ後に追加する。
+コア内部制御は [EK-DD-001 カーネルコア詳細設計書](./EK-DD-001_カーネルコア詳細設計書.md) を参照する。
 
 ---
 
@@ -49,7 +51,7 @@ related_documents:
 ### 1.2 単一責任範囲 (SSOT) と文書境界
 
 - **本書の正本範囲**: `external_interface`。システム境界（C ABI および Python 拡張境界）を越えて受け渡す公開 API、構造体レイアウト（C ABI 表現）、メモリ所有権・ビュー寿命契約、Arrow 出力形式と出力ハッシュ対象、互換性・バージョニング。
-- **DDとの関係**: 内部のモジュール間 DTO、ハンドル状態遷移条件、イベント処理手順、エラーコード値（`0`、`-1`〜`-13`、`-99`）は詳細設計書（DD）を正本とする。本書は DD の内部機能を外部境界（`core-capi` / `bindings/python`）へ露出する契約を定義する。
+- **DDとの関係**: 内部のモジュール間 DTO、ハンドル状態遷移条件、イベント処理手順、エラーコード値（`0`〜`3`、`-1`〜`-14`、`-99`）は [EK-DD-001](./EK-DD-001_カーネルコア詳細設計書.md) を正本とする。本書は DD の内部機能を外部境界（`core-capi` / `bindings/python`）へ露出する契約を定義する。
 - **DSとの関係**: `EventHeader`（32バイト、8バイト境界）のバイト配置と永続化スキーマは EK-DS-001 を正本とする。本書で定義する C ABI 型 `EkEventHeader` は DS の配置に厳密に従う。また、保存用スナップショット（`.eksnap`）の形式と出力結果（Arrow 出力）の形式を混同しない。
 - **BDとの関係**: ヘキサゴナルアーキテクチャ、信頼境界、パニック捕捉・ビュー無効化の横断方針は EK-BD-001 を正本とし、本書はそれを C ABI / Python API の具体契約へ落とし込む。
 - **ADR-003 との関係**: ADR-003 は「Proposed」であり、スパイク V-01〜V-06 の実測結果によっては本書の一部（バッチ単位の既定値や `abi3` 採否等）を改訂する。
@@ -62,8 +64,8 @@ related_documents:
 | BD 4.2節 #1      | `ExecutionPort` 境界呼び出し順序と契約      | 4.1節・4.2節（同一時刻市場イベントでは `on_market_event` → `poll_results` → 戦略コールバックの順） |
 | BD 4.2節 #5      | `core-capi`、Python API、Arrow 出力形式     | 2章・4章（`IF-001`〜`IF-003`）。ADR-003 スパイク V-01〜V-06 後に確定版へ更新                        |
 | DS 4.2節         | Arrow 出力のハッシュ対象と形式（NFR-01）    | 4.3.4節（約定履歴・資産推移・状態遷移ログの正準カラム配列に対する SHA-256 定義）                    |
-| DD 5.3節（予定） | 入力 `payload_idx` のアダプタ側規約         | 2.2節（`core` 取り込み前に外部フィード配列を参照するための添字契約。スナップショット時は0）         |
-| DD 5.3節（予定） | `state_digest` の詳細契約                   | 4.1.8節・4.2.5節（保存を伴わない最終状態 SHA-256 計算、`seekable=false` フィード時も実行可能）      |
+| DD 5.3節         | 入力 `payload_idx` のアダプタ側規約         | 2.2節（`core` 取り込み前に外部フィード配列を参照するための添字契約。スナップショット時は0）         |
+| DD 5.3節         | `state_digest` の詳細契約                   | 4.1.1節・4.2.5節（保存を伴わない最終状態 SHA-256 計算、`seekable=false` フィード時も実行可能）      |
 
 ---
 
@@ -71,10 +73,10 @@ related_documents:
 
 ### 2.1 インターフェース一覧
 
-| IF-ID  | インターフェース名                   | 方向   | 方式                                 | 相手先                          | 対応する DD 機能ID（予定） | 状態 |
+| IF-ID  | インターフェース名                   | 方向   | 方式                                 | 相手先                          | 対応する DD 機能ID         | 状態 |
 | :----- | :----------------------------------- | :----- | :----------------------------------- | :------------------------------ | :------------------------- | :--- |
-| IF-001 | `core-capi` C ABI インターフェース   | 双方向 | C ABI（`extern "C"` + `cbindgen`）   | 外部 C/C++ ホスト、ネイティブ層 | F-001〜F-010               | 計画 |
-| IF-002 | `bindings/python` Python 拡張 API    | 双方向 | PyO3 拡張モジュール（`maturin`）     | Python ホスト・Python 戦略      | F-001〜F-010               | 計画 |
+| IF-001 | `core-capi` C ABI インターフェース   | 双方向 | C ABI（`extern "C"` + `cbindgen`）   | 外部 C/C++ ホスト、ネイティブ層 | F-001〜F-012               | 計画 |
+| IF-002 | `bindings/python` Python 拡張 API    | 双方向 | PyO3 拡張モジュール（`maturin`）     | Python ホスト・Python 戦略      | F-001〜F-012               | 計画 |
 | IF-003 | Arrow ゼロコピー結果出力インターフェース | 提供   | Arrow PyCapsule（`__arrow_c_stream__` 等） | Polars / PyArrow / NumPy        | F-002、F-003 の結果蓄積    | 計画 |
 
 ```mermaid
@@ -137,14 +139,16 @@ flowchart LR
 | 関数名                    | 対応 DD 機能 | 主な引数                                                                 | 戻り値（`int32_t`）         | 概要                                                     |
 | :------------------------ | :----------- | :----------------------------------------------------------------------- | :-------------------------- | :------------------------------------------------------- |
 | `ek_capi_abi_version`     | —            | `uint32_t* out_major, uint32_t* out_minor`                               | `OK` / `ERR_INVALID_ARGUMENT` | C ABI バージョンを取得する                               |
-| `ek_kernel_create`        | F-001        | `config*`, `feeds*`, `feed_count`, `exec_vtable*`, `snap_vtable*`, `strategy*`, `out_handle**` | `OK` / 負のエラーコード     | 検証と初期メモリ確保を行い、`Ready` ハンドルを生成する   |
-| `ek_kernel_step`          | F-002        | `handle*`, `EkStepResult* out_result`                                    | 終了コード / 負のエラー     | 1イベントを処理し、結果構造体へ書き込む                  |
-| `ek_kernel_run`           | F-003        | `handle*`, `uint64_t max_events`, `EkStepResult* out_result`             | 終了コード / 負のエラー     | 停止条件まで `step` を繰り返す（`0` は上限なし）         |
-| `ek_kernel_submit_action` | F-004        | `EkActionContext* ctx`, `const EkAction* action`                         | `OK` / 負のエラーコード     | 戦略コールバック内から遅延アクションを提出する           |
-| `ek_kernel_capture`       | F-005        | `handle*`, `int64_t trigger_tag`                                         | `OK` / 負のエラーコード     | 現在の完全状態を `SnapshotPort` 経由で保存する           |
-| `ek_kernel_restore`       | F-006        | `handle*`, `const uint8_t* blob`, `size_t blob_len`                      | `OK` / 負のエラーコード     | 検証フェーズ＋適用フェーズにより状態を復元する           |
-| `ek_kernel_state_digest`  | F-005 派生   | `handle*`, `uint8_t out_sha256[32]`                                      | `OK` / 負のエラーコード     | 保存を伴わず正準バイト列の全セクション SHA-256 を算出する |
-| `ek_kernel_destroy`       | F-007        | `EkKernelHandle* handle`                                                 | `OK` / `ERR_REENTRANT`      | ハンドルと確保済みメモリを解放する                       |
+| `ek_kernel_create`              | F-001        | `config*`, `feeds*`, `feed_count`, `exec_vtable*`, `snap_vtable*`, `trace_vtable*`, `strategy*`, `out_handle**` | `OK` / 負のエラーコード | 検証と初期メモリ確保を行い、`Ready` ハンドルを生成する   |
+| `ek_kernel_step`                | F-002        | `handle*`, `EkStepResult* out_result`                                                                           | 終了コード / 負のエラー | 1イベントを処理し、結果構造体へ書き込む                  |
+| `ek_kernel_run`                 | F-003        | `handle*`, `uint64_t max_events`, `EkStepResult* out_result`                                                    | 終了コード / 負のエラー | 停止条件まで `step` を繰り返す（`0` は上限なし）         |
+| `ek_kernel_submit_action`       | F-004        | `EkActionContext* ctx`, `const EkAction* action`                                                                | `OK` / 負のエラーコード | 戦略コールバック内から遅延アクションを提出する           |
+| `ek_kernel_capture`             | F-005        | `handle*`, `int64_t trigger_tag`                                                                                | `OK` / 負のエラーコード | 現在の完全状態を `SnapshotPort` 経由で保存する           |
+| `ek_kernel_restore`             | F-006        | `handle*`, `const uint8_t* blob`, `size_t blob_len`                                                             | `OK` / 負のエラーコード | 検証フェーズ＋適用フェーズにより状態を復元する           |
+| `ek_kernel_state_digest`        | F-005 派生   | `handle*`, `uint8_t out_sha256[32]`                                                                             | `OK` / 負のエラーコード | 保存を伴わず正準バイト列の全セクション SHA-256 を算出する |
+| `ek_kernel_init_strategy_arena` | F-011        | `handle*`, `uint64_t offset`, `const uint8_t* bytes`, `size_t len`                                              | `OK` / 負のエラーコード | 実行前（`Ready` / 処理数0）に `StrategyArena` を初期化する |
+| `ek_kernel_read_strategy_arena` | F-012        | `handle*`, `uint64_t offset`, `uint8_t* out_bytes`, `size_t len`                                                | `OK` / 負のエラーコード | `StrategyArena` の内容を呼び出し側バッファへコピーする   |
+| `ek_kernel_destroy`             | F-007        | `EkKernelHandle* handle`                                                                                        | `OK` / `ERR_REENTRANT`  | ハンドルと確保済みメモリを解放する                       |
 
 #### 4.1.2 主要 C ABI 構造体仕様
 
@@ -158,7 +162,7 @@ flowchart LR
 | `strategy_arena_offset` | `uint64_t` |    必須    |  不可  | `8` の倍数                                                 |
 | `strategy_arena_size`   | `uint64_t` |    必須    |  不可  | `8` の倍数                                                 |
 | `action_queue_capacity` | `uint32_t` |    必須    |  不可  | `1` 以上                                                   |
-| `payload_record_size`   | `uint32_t` |    必須    |  不可  | `8` の倍数（標準 `64`）                                    |
+| `payload_record_size`   | `uint32_t` |    必須    |  不可  | `8` の倍数かつ `16` 以上（標準 `64`）                      |
 | `price_scale_exp`       | `int32_t`  |    必須    |  不可  | `0` 以下                                                   |
 | `qty_scale_exp`         | `int32_t`  |    必須    |  不可  | `0` 以下                                                   |
 | `prng_seed`             | `uint64_t` |    必須    |  不可  | 任意の64ビット値                                           |
@@ -167,6 +171,7 @@ flowchart LR
 | `hash_interval`         | `uint64_t` |    必須    |  不可  | `0` はステップごとのハッシュ計算を無効化                   |
 | `trace_enabled`         | `uint8_t`  |    必須    |  不可  | `0`（false）または `1`（true）。その他は `ERR_INVALID_ARGUMENT` |
 | `reserved`              | `uint8_t[7]` |  必須    |  不可  | `0` 埋め必須                                               |
+| `max_total_bytes`       | `uint64_t` |    必須    |  不可  | 初期化時に確保する合計バイト数の上限（DD 2.3節）           |
 
 **`EkEventHeader`（32バイト、8バイト境界）**
 
@@ -184,6 +189,7 @@ flowchart LR
 | 構造体          | フィールド              | C 型              |   必須性   | NULL可 | 制約・説明                                              |
 | :-------------- | :---------------------- | :---------------- | :--------: | :----: | :------------------------------------------------------ |
 | `EkStepResult`  | `status`                | `int32_t`         |    必須    |  不可  | 終了コードまたは負のエラーコード                        |
+| `EkStepResult`  | `detail`                | `int32_t`         |    必須    |  不可  | 戦略またはポートが返した詳細コード（ない場合は `0`）    |
 | `EkStepResult`  | `processed_event_count` | `uint64_t`        |    必須    |  不可  | 累計処理イベント数                                      |
 | `EkStepResult`  | `now_ns`                | `int64_t`         |    必須    |  不可  | 現在の論理時刻                                          |
 | `EkAction`      | `action_kind`           | `uint16_t`        |    必須    |  不可  | 戦略・`ExecutionPort` 間の識別子                        |
@@ -289,6 +295,7 @@ sequenceDiagram
 | `ERR_POISONED`                  | `KernelPoisonedError(KernelError)`            | `Poisoned` ハンドルへの禁止操作                     | `Poisoned`   |    不可    |
 | `ERR_REENTRANT`                 | `ReentrantError(KernelError)`                 | コールバック中の禁止操作                            | 変化なし     |  条件付き  |
 | `ERR_SNAPSHOT_UNSUPPORTED`      | `SnapshotUnsupportedError(KernelError)`       | 非 seekable フィードまたは最大長超過                | 変化なし     |  条件付き  |
+| `ERR_SNAPSHOT_IO`               | `SnapshotIoError(KernelError)`                | `SnapshotPort::store` / `load` の保存・読込失敗     | 変化なし     |  条件付き  |
 | `ERR_SNAPSHOT_INVALID` / `MISMATCH` | `SnapshotRestoreError(KernelError)`       | 復元時の形式・設定・ポート検証失敗                  | 変化なし     |  条件付き  |
 | `ERR_PORT_FAILURE`              | `PortFailureError(KernelFatalError)`          | ポート I/O 失敗または適用フェーズ失敗               | `Poisoned`   |    不可    |
 | `ERR_RESULT_OVERFLOW`           | `ResultOverflowError(KernelFatalError)`       | 約定結果によるキュー超過                            | `Poisoned`   |    不可    |
@@ -367,32 +374,32 @@ sequenceDiagram
 
 ## 6. 機能テスト要件（外部契約）
 
-外部契約として保証すべき内容を要件として定義する。具体的なテストケース・実行結果・証跡はテスト計画・結果報告書（`EK-TEST-001`）、品質ゲート（`QG-007`, `QG-012`, `QG-013`）は [EK-ENV-001](../setup/EK-ENV-001_環境・開発基盤仕様書.md) を正本とし、本書へ再掲しない。
+外部契約として保証すべき内容を要件として定義する。具体的なテストケース・実行結果・証跡は [EK-TEST-001 テスト計画・結果報告書](../test/EK-TEST-001_テスト計画・結果報告書.md)、品質ゲート（`QG-007`, `QG-012`, `QG-013`）は [EK-ENV-001](../setup/EK-ENV-001_環境・開発基盤仕様書.md) を正本とし、本書へ再掲しない。
 
-| 要件ID    | 対象 IF-ID | 保証すべき契約上の振る舞い                                                                                         | 検証観点                 | 対応テストケース（予定） |
+| 要件ID    | 対象 IF-ID | 保証すべき契約上の振る舞い                                                                                         | 検証観点                 | 対応テストケース         |
 | :-------- | :--------- | :----------------------------------------------------------------------------------------------------------------- | :----------------------- | :----------------------- |
-| TR-IF-001 | IF-001     | `EkEventHeader` のサイズ（32バイト）と各フィールドオフセットが EK-DS-001 と一致し、`cbindgen` 生成ヘッダに差分がない | 静的検証・互換性         | テスト計画で割り当てる   |
-| TR-IF-002 | IF-001     | 必須ポインタへの NULL、`struct_size` 不一致、`trace_enabled` の不正値に対して `ERR_INVALID_ARGUMENT` を返し状態を変えない | 異常・境界               | 同上                     |
-| TR-IF-003 | IF-001, IF-002 | `core-capi` と `bindings/python` で同一入力・同一シードのシナリオを実行した出力および `state_digest` の SHA-256 が一致する（V-03） | 決定論性・契約一致 | 同上                     |
-| TR-IF-004 | IF-001, IF-002 | コールバック内部でのパニックおよび Python 例外が境界外へ未捕捉のまま漏洩せず、`ERR_PANIC` / 例外変換されハンドルが `Poisoned` になる（V-04） | 異常・パニック安全 | 同上                     |
-| TR-IF-005 | IF-001, IF-002 | `Poisoned` 状態のハンドルで `step` / `capture` / `submit_action` を呼ぶと両境界で `ERR_POISONED` / `KernelPoisonedError` になる（V-06） | 異常・状態契約 | 同上                     |
-| TR-IF-006 | IF-002     | コールバック終了後（正常返却および例外送出の両方）に保持した `EventBatchView` / `HistoryView` / `StrategyArenaView` / 導出 `memoryview` へアクセスすると `RuntimeError` を送出する（V-05, QG-013） | メモリ安全性・寿命 | 同上                     |
-| TR-IF-007 | IF-003     | Arrow PyCapsule 経由で Polars / PyArrow へ渡した際にデータバッファの追加コピーが発生せず、解放時に `release` コールバックが実行される（V-02） | ゼロコピー・メモリ解放   | 同上                     |
-| TR-IF-008 | IF-003     | 同一入力・同一実行の結果から算出した Arrow 出力ハッシュ（`fills`, `equity_curve`, `state_transitions`）が OS・バッチ分割に関わらず一致する（NFR-01） | 決定論性・ハッシュ一致   | 同上                     |
+| TR-IF-001 | IF-001     | `EkEventHeader` のサイズ（32バイト）と各フィールドオフセットが EK-DS-001 と一致し、`cbindgen` 生成ヘッダに差分がない | 静的検証・互換性         | `TC-018` (`EK-TEST-001`) |
+| TR-IF-002 | IF-001     | 必須ポインタへの NULL、`struct_size` 不一致、`trace_enabled` の不正値に対して `ERR_INVALID_ARGUMENT` を返し状態を変えない | 異常・境界               | `TC-019` (`EK-TEST-001`) |
+| TR-IF-003 | IF-001, IF-002 | `core-capi` と `bindings/python` で同一入力・同一シードのシナリオを実行した出力および `state_digest` の SHA-256 が一致する（V-03） | 決定論性・契約一致 | `TC-022` (`EK-TEST-001`) |
+| TR-IF-004 | IF-001, IF-002 | コールバック内部でのパニックおよび Python 例外が境界外へ未捕捉のまま漏洩せず、`ERR_PANIC` / 例外変換されハンドルが `Poisoned` になる（V-04） | 異常・パニック安全 | `TC-023` (`EK-TEST-001`) |
+| TR-IF-005 | IF-001, IF-002 | `Poisoned` 状態のハンドルで `step` / `capture` / `submit_action` を呼ぶと両境界で `ERR_POISONED` / `KernelPoisonedError` になる（V-06） | 異常・状態契約 | `TC-023` (`EK-TEST-001`) |
+| TR-IF-006 | IF-002     | コールバック終了後（正常返却および例外送出の両方）に保持した `EventBatchView` / `HistoryView` / `StrategyArenaView` / 導出 `memoryview` へアクセスすると `RuntimeError` を送出する（V-05, QG-013） | メモリ安全性・寿命 | `TC-025` (`EK-TEST-001`) |
+| TR-IF-007 | IF-003     | Arrow PyCapsule 経由で Polars / PyArrow へ渡した際にデータバッファの追加コピーが発生せず、解放時に `release` コールバックが実行される（V-02） | ゼロコピー・メモリ解放   | `TC-021` (`EK-TEST-001`) |
+| TR-IF-008 | IF-003     | 同一入力・同一実行の結果から算出した Arrow 出力ハッシュ（`fills`, `equity_curve`, `state_transitions`）が OS・バッチ分割に関わらず一致する（NFR-01） | 決定論性・ハッシュ一致   | `TC-015` (`EK-TEST-001`) |
 
 ---
 
 ## 7. 作成完了チェック
 
 - [x] `document_role`、`ssot_scope`、`status`、`owner` を Frontmatter へ設定した。
-- [x] インターフェース一覧の IF-ID と、DD 側の想定機能 ID（F-001〜F-010）を対応付けた。
+- [x] インターフェース一覧の IF-ID と、DD の機能 ID（F-001〜F-012）を対応付けた。
 - [x] 提供者・利用者、方式、データ形式、時刻、識別子、タイムアウト・再試行を記入した。
 - [x] 認証・認可が対象外（ローカルインメモリ境界）である旨と信頼境界の原則を記入した。
 - [x] リクエスト・レスポンス・構造体の必須性、NULL 可否、制約、エラー応答を記入した。
 - [x] バージョン方式、互換性の範囲、非推奨・廃止の手順を記入した。
 - [x] 受信・出力形式（Arrow）と保存形式（EK-DS-001）を混同せず、保存後の形式は DS を参照している。
 - [x] 品質ゲート（`QG-007`, `QG-012`, `QG-013`）は EK-ENV-001 への参照とし、実行コマンド・合格基準を再掲していない。
-- [ ] DD・テスト計画への相対リンクおよび対応テストケース ID を記入した（DD は別ブランチ、テスト計画は未マージのためマージ後に更新）。
+- [x] DD・テスト計画への相対リンクおよび対応テストケース ID（`TC-015`, `TC-018`〜`TC-025`）を記入した。
 - [x] 未置換の `[ ... ]`、`YYYY-MM-DD`、サンプル固有名が残っていない。
 
 ---
@@ -402,3 +409,4 @@ sequenceDiagram
 | 版数    | 改訂日     | 変更者 | 変更内容・変更理由 (Why)                                                                                                                                    |
 | :------ | :--------- | :----- | :---------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Rev.0.1 | 2026-11-26 | xzyozi | 初版ドラフト。BD 4.2節、DS 4.2節、ADR-003（層分離案C）を引き継ぎ、`core-capi` C ABI、`bindings/python` PyO3 API、Arrow PyCapsule 出力とハッシュ契約を定義。 |
+| Rev.0.2 | 2026-11-27 | xzyozi | `EK-DD-001`・`EK-TEST-001` との相互リンクを追加し、`F-011`/`F-012`、`max_total_bytes`、`StepResult.detail`、`ERR_SNAPSHOT_IO`、`payload_record_size >= 16`、`TC-ID` 対応を同期した。 |
