@@ -3,6 +3,7 @@
 use crate::event::{EventHeader, EventRecord};
 use crate::history::HistoryView;
 use crate::kernel::Context;
+use crate::prng::Prng;
 
 /// ポートの失敗。値は、ポートが定義する詳細コードで、`StepResult.detail` に入る。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -20,7 +21,7 @@ pub trait EventFeedPort {
 /// 約定判定（F-009）。`capture_state` などは、縦切りの範囲外。
 pub trait ExecutionPort {
     /// `ActionArrival` を配送するときに呼ばれる。
-    fn on_arrival(&mut self, event: EventRecord<'_>) -> Result<(), PortError>;
+    fn on_arrival(&mut self, event: EventRecord<'_>, rng: &mut Prng) -> Result<(), PortError>;
 
     /// 市場イベントを配送するときに、履歴への追加と戦略への通知より前に呼ばれる。
     /// `history` は、今のイベントを含まない。
@@ -28,6 +29,7 @@ pub trait ExecutionPort {
         &mut self,
         event: EventRecord<'_>,
         history: HistoryView<'_>,
+        rng: &mut Prng,
     ) -> Result<(), PortError>;
 
     /// 積まれた結果を、生成した順に1件ずつ返す。結果がなければ `Ok(false)`。

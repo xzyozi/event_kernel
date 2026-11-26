@@ -126,7 +126,7 @@ impl FillNextExec {
 }
 
 impl ExecutionPort for FillNextExec {
-    fn on_arrival(&mut self, event: EventRecord<'_>) -> Result<(), PortError> {
+    fn on_arrival(&mut self, event: EventRecord<'_>, _rng: &mut Prng) -> Result<(), PortError> {
         let now = event.header.timestamp_ns;
         self.record(event_type::ACTION_ARRIVAL, now, None);
         self.pending += 1;
@@ -138,6 +138,7 @@ impl ExecutionPort for FillNextExec {
         &mut self,
         event: EventRecord<'_>,
         history: HistoryView<'_>,
+        _rng: &mut Prng,
     ) -> Result<(), PortError> {
         let now = event.header.timestamp_ns;
         self.record(event.header.event_type, now, Some(history));

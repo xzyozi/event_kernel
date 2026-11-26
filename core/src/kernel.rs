@@ -10,6 +10,7 @@ use crate::event::{
 };
 use crate::history::{HistoryRing, HistoryView};
 use crate::ports::{EventFeedPort, ExecutionPort, PortError, Strategy};
+use crate::prng::Prng;
 use crate::queue::ActionQueue;
 use crate::status::*;
 use crate::util::copy_bytes;
@@ -69,6 +70,7 @@ pub struct Context<'a> {
     now_ns: i64,
     history: HistoryView<'a>,
     strategy_arena: &'a mut [u8],
+    rng: &'a mut Prng,
     queue: &'a mut ActionQueue,
     next_action_sequence_id: &'a mut u64,
 }
@@ -87,6 +89,11 @@ impl Context<'_> {
     /// `StrategyArena` の書き込み可能ビュー。
     pub fn strategy_arena(&mut self) -> &mut [u8] {
         self.strategy_arena
+    }
+
+    /// 決定論 PRNG。戦略は、これ以外の乱数源を使わない（EK-DD-001 2.6節）。
+    pub fn rng(&mut self) -> &mut Prng {
+        self.rng
     }
 
     /// アクションを提出する（F-004）。失敗しても、状態を変更しない。
@@ -144,6 +151,7 @@ struct Inner<F, E, S> {
     now_ns: i64,
     processed_event_count: u64,
     next_action_sequence_id: u64,
+    rng: Prng,
     last_event_flags: u16,
     feed: F,
     exec: E,
@@ -198,6 +206,7 @@ where
                 now_ns: CLOCK_UNSET_NS,
                 processed_event_count: 0,
                 next_action_sequence_id: 0,
+                rng: Prng::from_seed(config.prng_seed),
                 last_event_flags: 0,
                 feed,
                 exec,
@@ -382,6 +391,7 @@ where
             config,
             now_ns,
             next_action_sequence_id,
+            rng,
             exec,
             strategy,
             head_payload,
@@ -406,10 +416,10 @@ where
         // 手順5: `ExecutionPort` の呼び出しと、結果の検査。
         if market || kind == event_type::ACTION_ARRIVAL {
             if market {
-                exec.on_market_event(event, HistoryView::new(history))
+                exec.on_market_event(event, HistoryView::new(history), rng)
                     .map_err(port_failure)?;
             } else {
-                exec.on_arrival(event).map_err(port_failure)?;
+                exec.on_arrival(event, rng).map_err(port_failure)?;
             }
             loop {
                 *result_header = EventHeader::default();
@@ -454,6 +464,7 @@ where
                 now_ns,
                 history: HistoryView::new(history),
                 strategy_arena,
+                rng,
                 queue,
                 next_action_sequence_id,
             };
