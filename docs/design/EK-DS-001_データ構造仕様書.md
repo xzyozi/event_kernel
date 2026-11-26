@@ -5,7 +5,7 @@ document_number: "EK-DS-001"
 document_role: "normative"
 ssot_scope: "persistent_data"
 status: "draft"
-version: "0.6"
+version: "0.7"
 created_at: "2026-11-25"
 updated_at: "2026-11-25"
 author: "xzyozi"
@@ -14,6 +14,7 @@ purpose: "イベントヘッダ、スナップショットのバイナリ形式�
 related_documents:
   - "ドキュメントガバナンス（相対パス: ../README.md）"
   - "EK-BD-001 基本設計書（相対パス: ./EK-BD-001_基本設計書.md）"
+  - "EK-DD-001 カーネルコア詳細設計書（相対パス: ./EK-DD-001_カーネルコア詳細設計書.md）"
   - "Deterministic Event Kernel システム要件定義書（相対パス: ../features/deterministic-event-kernel-requirements.md）"
   - "EK-ENV-001 環境・開発基盤仕様書（相対パス: ../setup/EK-ENV-001_環境・開発基盤仕様書.md）"
   - "ADR-004 coreのメモリ確保方針（相対パス: ../adr/004-core-memory-allocation.md）"
@@ -22,7 +23,7 @@ related_documents:
 # データ構造仕様書（イベントヘッダ・スナップショット・トレースログ）
 **決定論的リプレイのための、保存形式と状態ハッシュの定義**
 
-詳細設計書（DD）は未作成のため、本書から DD へのリンクは張っていない。DD の作成後に追加する。
+詳細設計書は [EK-DD-001 カーネルコア詳細設計書](./EK-DD-001_カーネルコア詳細設計書.md)である。
 
 ---
 
@@ -446,7 +447,7 @@ erDiagram
 - [x] ファイルロックを使わない理由と、衝突時の扱いを記入した。
 - [x] バージョン移行、後方互換性、ロールバック、移行失敗時の扱いを記入した。
 - [x] Mermaid のサンプルのエンティティ、フィールド、関係と、未置換の `[ ... ]` が残っていない。
-- [ ] DD へのリンクを記入した（DD は未作成）。
+- [x] DD へのリンクを記入した。
 - [ ] `event_type` ごとのペイロードの配置を定義した（4.2節）。
 
 ---
@@ -461,3 +462,4 @@ erDiagram
 | Rev.0.4 | 2026-11-25 | xzyozi | DD のレビューを受けて、`ActionArrival` のペイロード配置を DD から移して 2.4節に定義した。PRNG の方式を Xoshiro256++ に合わせた。                                                                                                                                                                                                                                                                                                                                                                                                                                 |
 | Rev.0.5 | 2026-11-25 | xzyozi | `payload_record_size` の下限を16に揃えた（DD の制約に合わせた）。                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
 | Rev.0.6 | 2026-11-25 | xzyozi | ステップごとの状態ハッシュの計算時点を、先頭の補充の後の状態と明記した（DD の手順の入れ替えに合わせた）。                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| Rev.0.7 | 2026-11-26 | xzyozi | DD のマージに伴い、DD へのリンクを追加した。                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
