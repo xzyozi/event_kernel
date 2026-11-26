@@ -57,7 +57,7 @@ struct NextEventFill {
 
 impl ExecutionPort for NextEventFill {
     #[inline]
-    fn on_arrival(&mut self, _event: EventRecord<'_>) -> Result<(), PortError> {
+    fn on_arrival(&mut self, _event: EventRecord<'_>, _rng: &mut Prng) -> Result<(), PortError> {
         self.pending += 1;
         Ok(())
     }
@@ -67,6 +67,7 @@ impl ExecutionPort for NextEventFill {
         &mut self,
         event: EventRecord<'_>,
         _h: HistoryView<'_>,
+        _rng: &mut Prng,
     ) -> Result<(), PortError> {
         if self.pending > 0 {
             self.fills_to_emit = self.pending;

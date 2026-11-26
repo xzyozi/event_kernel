@@ -19,6 +19,7 @@ pub mod event;
 mod history;
 mod kernel;
 pub mod ports;
+mod prng;
 mod queue;
 pub mod status;
 mod util;
@@ -30,4 +31,5 @@ pub use event::{
 pub use history::HistoryView;
 pub use kernel::{Action, CLOCK_UNSET_NS, Context, HandleState, Kernel, RunLimit, StepResult};
 pub use ports::{EventFeedPort, ExecutionPort, PortError, Strategy, StrategyStatus};
+pub use prng::Prng;
 pub use status::*;
