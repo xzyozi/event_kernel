@@ -241,6 +241,24 @@ where
         }
     }
 
+    /// 戦略領域へ初期値を書き込む（F-011）。最初のステップより前に限る。
+    ///
+    /// `offset` は `StrategyArena` の先頭からの位置で、8の倍数。失敗しても状態を変更しない。
+    pub fn init_strategy_arena(&self, offset: u64, bytes: &[u8]) -> i32 {
+        match self.inner.try_borrow_mut() {
+            Ok(mut inner) => inner.init_strategy_arena(offset, bytes),
+            Err(_) => ERR_REENTRANT,
+        }
+    }
+
+    /// 戦略領域の内容を、呼び出し側のバッファへコピーする（F-012）。`out.len()` バイトを読む。
+    pub fn read_strategy_arena(&self, offset: u64, out: &mut [u8]) -> i32 {
+        match self.inner.try_borrow() {
+            Ok(inner) => inner.read_strategy_arena(offset, out),
+            Err(_) => ERR_REENTRANT,
+        }
+    }
+
     /// ハンドルの状態。ステップの実行中に呼ばれた場合は `Running`。
     pub fn state(&self) -> HandleState {
         self.inner
@@ -310,6 +328,57 @@ where
             detail,
             processed_event_count: self.processed_event_count,
             now_ns: self.now_ns,
+        }
+    }
+
+    /// `StrategyArena` の内側の範囲を、`arena` 全体の添字の範囲にする。範囲外なら `None`。
+    fn arena_range(&self, offset: u64, len: usize) -> Option<core::ops::Range<usize>> {
+        if !offset.is_multiple_of(8) {
+            return None;
+        }
+        let end = offset.checked_add(u64::try_from(len).ok()?)?;
+        if end > self.config.strategy_arena_size {
+            return None;
+        }
+        let base = self.config.strategy_arena_offset;
+        let start = usize::try_from(base.checked_add(offset)?).ok()?;
+        let end = usize::try_from(base.checked_add(end)?).ok()?;
+        Some(start..end)
+    }
+
+    fn init_strategy_arena(&mut self, offset: u64, bytes: &[u8]) -> i32 {
+        match self.state {
+            HandleState::Poisoned => return ERR_POISONED,
+            HandleState::Ready if self.processed_event_count == 0 => {}
+            _ => return ERR_INVALID_ARGUMENT,
+        }
+        let Some(range) = self.arena_range(offset, bytes.len()) else {
+            return ERR_INVALID_ARGUMENT;
+        };
+        match self.arena.get_mut(range) {
+            Some(target) => {
+                target.copy_from_slice(bytes);
+                OK
+            }
+            None => ERR_INVALID_ARGUMENT,
+        }
+    }
+
+    fn read_strategy_arena(&self, offset: u64, out: &mut [u8]) -> i32 {
+        match self.state {
+            HandleState::Poisoned => return ERR_POISONED,
+            HandleState::Ready | HandleState::Finished => {}
+            HandleState::Running => return ERR_REENTRANT,
+        }
+        let Some(range) = self.arena_range(offset, out.len()) else {
+            return ERR_INVALID_ARGUMENT;
+        };
+        match self.arena.get(range) {
+            Some(source) => {
+                out.copy_from_slice(source);
+                OK
+            }
+            None => ERR_INVALID_ARGUMENT,
         }
     }
 
