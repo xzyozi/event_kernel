@@ -45,7 +45,11 @@ pub struct VecFeed {
 
 impl VecFeed {
     pub fn new(events: Vec<EventHeader>) -> Self {
-        Self { events, next: 0, fail_at: None }
+        Self {
+            events,
+            next: 0,
+            fail_at: None,
+        }
     }
 
     pub fn ticks(timestamps: &[i64]) -> Self {
@@ -156,7 +160,11 @@ impl ExecutionPort for FillNextExec {
         }
         let (kind, timestamp_ns) = self.results[self.result_pos];
         self.result_pos += 1;
-        *header = EventHeader { timestamp_ns, event_type: kind, ..EventHeader::default() };
+        *header = EventHeader {
+            timestamp_ns,
+            event_type: kind,
+            ..EventHeader::default()
+        };
         Ok(true)
     }
 }
@@ -199,7 +207,11 @@ impl Strategy for RecordingStrategy {
         }
         if let Some((at, latency_ns)) = self.submit_on {
             if at == h.timestamp_ns && event_type::is_market(h.event_type) {
-                let status = context.submit_action(&Action { action_kind: 1, latency_ns, payload: &[9] });
+                let status = context.submit_action(&Action {
+                    action_kind: 1,
+                    latency_ns,
+                    payload: &[9],
+                });
                 if self.submit_status.len() < self.submit_status.capacity() {
                     self.submit_status.push(status);
                 }

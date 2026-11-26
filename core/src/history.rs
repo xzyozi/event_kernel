@@ -100,6 +100,9 @@ impl<'a> HistoryView<'a> {
 
     /// 最新の要素。
     pub fn latest(&self) -> Option<EventRecord<'a>> {
-        self.ring.len.checked_sub(1).and_then(|index| self.ring.get(index))
+        self.ring
+            .len
+            .checked_sub(1)
+            .and_then(|index| self.ring.get(index))
     }
 }

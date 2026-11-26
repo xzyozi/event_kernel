@@ -31,8 +31,11 @@ pub trait ExecutionPort {
     ) -> Result<(), PortError>;
 
     /// 積まれた結果を、生成した順に1件ずつ返す。結果がなければ `Ok(false)`。
-    fn poll_result(&mut self, header: &mut EventHeader, payload: &mut [u8])
-    -> Result<bool, PortError>;
+    fn poll_result(
+        &mut self,
+        header: &mut EventHeader,
+        payload: &mut [u8],
+    ) -> Result<bool, PortError>;
 }
 
 /// 戦略の戻り値。0は正常、1以上は戦略が定義する異常（EK-DD-001 2.8節）。

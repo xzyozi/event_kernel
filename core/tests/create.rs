@@ -57,14 +57,20 @@ fn strategy_arena_outside_arena_is_rejected() {
     let mut c = config();
     c.strategy_arena_offset = 8;
     c.strategy_arena_size = 64;
-    assert_eq!(create_with(c, VecFeed::ticks(&[10])).err(), Some(ERR_INVALID_ARGUMENT));
+    assert_eq!(
+        create_with(c, VecFeed::ticks(&[10])).err(),
+        Some(ERR_INVALID_ARGUMENT)
+    );
 }
 
 #[test]
 fn capacity_over_limit_is_rejected() {
     let mut c = config();
     c.max_total_bytes = 1024;
-    assert_eq!(create_with(c, VecFeed::ticks(&[10])).err(), Some(ERR_CAPACITY_EXCEEDED));
+    assert_eq!(
+        create_with(c, VecFeed::ticks(&[10])).err(),
+        Some(ERR_CAPACITY_EXCEEDED)
+    );
 }
 
 #[test]
@@ -73,7 +79,10 @@ fn capacity_overflow_is_rejected() {
     c.arena_size = u64::MAX - 7;
     c.strategy_arena_size = 0;
     c.max_total_bytes = u64::MAX;
-    assert_eq!(create_with(c, VecFeed::ticks(&[10])).err(), Some(ERR_CAPACITY_EXCEEDED));
+    assert_eq!(
+        create_with(c, VecFeed::ticks(&[10])).err(),
+        Some(ERR_CAPACITY_EXCEEDED)
+    );
 }
 
 #[test]

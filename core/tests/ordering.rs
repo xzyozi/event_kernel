@@ -29,9 +29,16 @@ fn ac02_same_time_external_before_system_and_no_early_fill() {
         ]
     );
     // システムストリームの連番: 到達0、OrderAck1、Fill2。
-    let system: Vec<u64> = seen.iter().filter(|s| s.3 == ACTION_STREAM_ID).map(|s| s.2).collect();
+    let system: Vec<u64> = seen
+        .iter()
+        .filter(|s| s.3 == ACTION_STREAM_ID)
+        .map(|s| s.2)
+        .collect();
     assert_eq!(system, vec![1, 2]);
-    assert_eq!(kernel.inspect(|_, _, s| s.submit_status.clone()).unwrap(), vec![OK]);
+    assert_eq!(
+        kernel.inspect(|_, _, s| s.submit_status.clone()).unwrap(),
+        vec![OK]
+    );
 
     // 提出時刻 10 + latency 5 より前に、結果は現れない。
     for s in seen.iter().filter(|s| s.0 == ORDER_ACK || s.0 == FILL) {
@@ -74,7 +81,10 @@ fn execution_port_runs_before_strategy_without_current_event_in_history() {
 
 #[test]
 fn history_ring_overwrites_oldest() {
-    let kernel = kernel(VecFeed::ticks(&[1, 2, 3, 4, 5, 6]), RecordingStrategy::new());
+    let kernel = kernel(
+        VecFeed::ticks(&[1, 2, 3, 4, 5, 6]),
+        RecordingStrategy::new(),
+    );
     kernel.run(RunLimit::default());
     let last = *seen(&kernel).last().unwrap();
     // history_ring_len は4。
@@ -97,16 +107,29 @@ fn latency_must_be_positive_and_in_range() {
 fn full_queue_returns_queue_full_without_poison() {
     struct Flood(Vec<i32>);
     impl Strategy for Flood {
-        fn on_event(&mut self, context: &mut Context<'_>, _event: EventRecord<'_>) -> StrategyStatus {
+        fn on_event(
+            &mut self,
+            context: &mut Context<'_>,
+            _event: EventRecord<'_>,
+        ) -> StrategyStatus {
             for _ in 0..17 {
-                let action = Action { action_kind: 0, latency_ns: 1, payload: &[] };
+                let action = Action {
+                    action_kind: 0,
+                    latency_ns: 1,
+                    payload: &[],
+                };
                 self.0.push(context.submit_action(&action));
             }
             0
         }
     }
-    let kernel = Kernel::create(config(), VecFeed::ticks(&[10]), FillNextExec::new(), Flood(Vec::new()))
-        .unwrap();
+    let kernel = Kernel::create(
+        config(),
+        VecFeed::ticks(&[10]),
+        FillNextExec::new(),
+        Flood(Vec::new()),
+    )
+    .unwrap();
     // capacity 16 の17件目が ERR_QUEUE_FULL。
     let result = kernel.step();
     assert_eq!(result.status, OK);

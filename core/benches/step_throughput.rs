@@ -35,7 +35,10 @@ impl EventFeedPort for SliceFeed<'_> {
     fn pop_next(&mut self, header: &mut EventHeader, payload: &mut [u8]) -> Result<(), PortError> {
         let h = self.headers.get(self.next).ok_or(PortError(1))?;
         let offset = self.next * PAYLOAD;
-        let src = self.payloads.get(offset..offset + PAYLOAD).ok_or(PortError(2))?;
+        let src = self
+            .payloads
+            .get(offset..offset + PAYLOAD)
+            .ok_or(PortError(2))?;
         *header = *h;
         payload.copy_from_slice(src);
         self.next += 1;
@@ -60,7 +63,11 @@ impl ExecutionPort for NextEventFill {
     }
 
     #[inline]
-    fn on_market_event(&mut self, event: EventRecord<'_>, _h: HistoryView<'_>) -> Result<(), PortError> {
+    fn on_market_event(
+        &mut self,
+        event: EventRecord<'_>,
+        _h: HistoryView<'_>,
+    ) -> Result<(), PortError> {
         if self.pending > 0 {
             self.fills_to_emit = self.pending;
             self.pending = 0;
@@ -70,7 +77,11 @@ impl ExecutionPort for NextEventFill {
     }
 
     #[inline]
-    fn poll_result(&mut self, header: &mut EventHeader, _payload: &mut [u8]) -> Result<bool, PortError> {
+    fn poll_result(
+        &mut self,
+        header: &mut EventHeader,
+        _payload: &mut [u8],
+    ) -> Result<bool, PortError> {
         if self.fills_to_emit == 0 {
             return Ok(false);
         }
@@ -114,7 +125,11 @@ impl Strategy for BenchStrategy {
         }
         self.market_events += 1;
         if self.market_events % 100 == 0 {
-            let action = Action { action_kind: 1, latency_ns: 1, payload: &[] };
+            let action = Action {
+                action_kind: 1,
+                latency_ns: 1,
+                payload: &[],
+            };
             let _ = context.submit_action(&action);
         }
         0
@@ -122,7 +137,10 @@ impl Strategy for BenchStrategy {
 }
 
 fn env_usize(name: &str, default: usize) -> usize {
-    std::env::var(name).ok().and_then(|v| v.parse().ok()).unwrap_or(default)
+    std::env::var(name)
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(default)
 }
 
 fn main() {
@@ -168,7 +186,11 @@ fn main() {
 
     let mut rates = Vec::with_capacity(runs);
     for run in 0..runs {
-        let feed = SliceFeed { headers: &headers, payloads: &payloads, next: 0 };
+        let feed = SliceFeed {
+            headers: &headers,
+            payloads: &payloads,
+            next: 0,
+        };
         let strategy = BenchStrategy {
             window: [0; MA_LEN],
             pos: 0,
@@ -199,5 +221,8 @@ fn main() {
     rates.sort_by(f64::total_cmp);
     let median = rates[rates.len() / 2];
     println!("median: {median:.0} events/s (runs={runs}, input={events} market events)");
-    println!("NFR-03 (>= 10,000,000 events/s): {}", if median >= 1e7 { "met" } else { "not met" });
+    println!(
+        "NFR-03 (>= 10,000,000 events/s): {}",
+        if median >= 1e7 { "met" } else { "not met" }
+    );
 }

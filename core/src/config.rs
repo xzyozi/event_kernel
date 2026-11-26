@@ -94,7 +94,11 @@ impl KernelConfig {
             .checked_add(streams.checked_mul(record.checked_add(8)?)?)?
             .checked_add(queue.checked_mul(record)?.checked_add(8)?)?
             .checked_add(history.checked_mul(record)?.checked_add(8)?)?
-            .checked_add(streams.checked_mul(token.checked_add(16)?)?.checked_add(8)?)?
+            .checked_add(
+                streams
+                    .checked_mul(token.checked_add(16)?)?
+                    .checked_add(8)?,
+            )?
             .checked_add(exec_state.checked_add(8)?)?;
         let buffers = self
             .arena_size

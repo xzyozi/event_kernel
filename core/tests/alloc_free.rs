@@ -59,7 +59,11 @@ impl Strategy for Busy {
         self.events += 1;
         context.strategy_arena()[0] = context.strategy_arena()[0].wrapping_add(1);
         if event_type::is_market(event.header.event_type) {
-            let action = Action { action_kind: 1, latency_ns: 3, payload: &[1, 2, 3] };
+            let action = Action {
+                action_kind: 1,
+                latency_ns: 3,
+                payload: &[1, 2, 3],
+            };
             let _ = context.submit_action(&action);
         }
         0
@@ -85,7 +89,11 @@ fn ac05_no_heap_allocation_after_create() {
     assert_eq!(rest.status, RUN_LIMIT_REACHED);
     assert_eq!(last.status, STEP_FINISHED);
     // 市場2,002件、到達、OrderAck、Fill を処理している。
-    assert!(last.processed_event_count > 6_000, "{}", last.processed_event_count);
+    assert!(
+        last.processed_event_count > 6_000,
+        "{}",
+        last.processed_event_count
+    );
     assert_eq!(ALLOCS.load(Ordering::SeqCst), 0, "確保の回数");
     assert_eq!(DEALLOCS.load(Ordering::SeqCst), 0, "解放の回数");
 

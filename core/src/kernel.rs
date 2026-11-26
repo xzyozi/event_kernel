@@ -461,7 +461,10 @@ where
             };
             let status = strategy.on_event(&mut context, event);
             if status != 0 {
-                return Err((ERR_STRATEGY_FAILURE, i32::try_from(status).unwrap_or(i32::MAX)));
+                return Err((
+                    ERR_STRATEGY_FAILURE,
+                    i32::try_from(status).unwrap_or(i32::MAX),
+                ));
             }
         }
         Ok(())
@@ -469,7 +472,11 @@ where
 
     /// 手順8: 外部フィードの先頭を補充し、今のイベントと比べて検証する。
     fn refill(&mut self, current: EventHeader) -> Result<(), Failure> {
-        self.head_present = intake(&mut self.feed, &mut self.head_header, &mut self.head_payload)?;
+        self.head_present = intake(
+            &mut self.feed,
+            &mut self.head_header,
+            &mut self.head_payload,
+        )?;
         if !self.head_present {
             return Ok(());
         }
