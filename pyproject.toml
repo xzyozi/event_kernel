@@ -160,3 +160,8 @@ addopts = "-v --tb=short"
 #
 # # grpc / torch / gevent / 非同期イベントループ等でハングする場合は forkserver を指定
 # # process_isolation = "forkserver"
+
+# Python のパッケージはない。Rust の core/ と templates/ を、setuptools の自動探索で
+# パッケージとして拾わないようにする（flat-layout の複数パッケージのエラーを防ぐ）。
+[tool.setuptools]
+packages = []

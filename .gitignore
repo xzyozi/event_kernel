@@ -42,3 +42,6 @@ Thumbs.db
 
 # tmp_script
 tmp_script/*
+
+# Rust
+target/
