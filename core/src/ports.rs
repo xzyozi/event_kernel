@@ -36,6 +36,16 @@ pub trait EventFeedPort {
             len: 0,
         })
     }
+
+    /// `restore` の検証フェーズ: 位置トークンが有効かを検査する。状態を変更しない。
+    fn validate_position(&self, _token: &[u8]) -> Result<(), PortError> {
+        Ok(())
+    }
+
+    /// `restore` の適用フェーズ: 保存した位置トークンの位置へ戻す（全上書き）。
+    fn seek(&mut self, _token: &[u8]) -> Result<(), PortError> {
+        Err(PortError(0))
+    }
 }
 
 impl<F: EventFeedPort + ?Sized> EventFeedPort for Box<F> {
@@ -50,9 +60,17 @@ impl<F: EventFeedPort + ?Sized> EventFeedPort for Box<F> {
     fn position(&self, out: &mut [u8]) -> Result<FeedPosition, PortError> {
         (**self).position(out)
     }
+
+    fn validate_position(&self, token: &[u8]) -> Result<(), PortError> {
+        (**self).validate_position(token)
+    }
+
+    fn seek(&mut self, token: &[u8]) -> Result<(), PortError> {
+        (**self).seek(token)
+    }
 }
 
-/// 約定判定（F-009）。`restore_state` と `validate_state` はスナップショット復元時に追加予定。
+/// 約定判定（F-009）。
 pub trait ExecutionPort {
     /// `ActionArrival` を配送するときに呼ばれる。
     fn on_arrival(&mut self, event: EventRecord<'_>, rng: &mut Prng) -> Result<(), PortError>;
@@ -77,6 +95,28 @@ pub trait ExecutionPort {
     fn capture_state(&self, _out: &mut [u8]) -> Result<usize, PortError> {
         Ok(0)
     }
+
+    /// `restore` の検証フェーズ: バイト列が復元できるかを検査する。状態を変更しない。
+    fn validate_state(&self, _state: &[u8]) -> Result<(), PortError> {
+        Ok(())
+    }
+
+    /// `restore` の適用フェーズ: 内部状態をバイト列だけから全上書きする。
+    fn restore_state(&mut self, _state: &[u8]) -> Result<(), PortError> {
+        Ok(())
+    }
+}
+
+/// スナップショット保存先（EK-DD-001 2.7節）。
+/// `load` は `core` からは呼ばず、境界層（ホスト）が呼ぶ。
+pub trait SnapshotPort {
+    /// スナップショットのバイト列を保存する。同じ名前の既存ファイルを上書きしない（EK-DS-001 3.1節）。
+    fn store(
+        &mut self,
+        blob: &[u8],
+        logical_time_ns: i64,
+        event_count: u64,
+    ) -> Result<(), PortError>;
 }
 
 /// トレース出力先（EK-DD-001 2.7節、EK-DS-001 3.1節）。

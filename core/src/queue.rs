@@ -41,6 +41,15 @@ impl ActionQueue {
         self.heap_len
     }
 
+    pub(crate) fn clear(&mut self) {
+        self.heap_len = 0;
+        let cap = self.free.len();
+        self.free_len = cap;
+        for (i, slot) in self.free.iter_mut().enumerate() {
+            *slot = cap - 1 - i;
+        }
+    }
+
     pub(crate) fn record_size(&self) -> usize {
         self.record
     }

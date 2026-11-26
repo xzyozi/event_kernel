@@ -235,3 +235,99 @@ fn ac05_no_heap_allocation_with_multi_feed_and_trace() {
     assert_eq!(alloc_count(), 0, "複数フィード時の確保回数");
     assert_eq!(dealloc_count(), 0, "複数フィード時の解放回数");
 }
+
+struct SeekFeed {
+    events: Vec<EventHeader>,
+    next: usize,
+}
+
+impl EventFeedPort for SeekFeed {
+    fn peek_next_timestamp(&mut self) -> Result<Option<i64>, PortError> {
+        Ok(self.events.get(self.next).map(|h| h.timestamp_ns))
+    }
+
+    fn pop_next(&mut self, header: &mut EventHeader, payload: &mut [u8]) -> Result<(), PortError> {
+        let ev = *self.events.get(self.next).ok_or(PortError(1))?;
+        *header = ev;
+        payload[..8].copy_from_slice(&ev.timestamp_ns.to_le_bytes());
+        self.next += 1;
+        Ok(())
+    }
+
+    fn position(&self, out: &mut [u8]) -> Result<FeedPosition, PortError> {
+        out[..8].copy_from_slice(&(self.next as u64).to_le_bytes());
+        Ok(FeedPosition {
+            seekable: true,
+            len: 8,
+        })
+    }
+
+    fn validate_position(&self, token: &[u8]) -> Result<(), PortError> {
+        if token.len() == 8 {
+            Ok(())
+        } else {
+            Err(PortError(1))
+        }
+    }
+
+    fn seek(&mut self, token: &[u8]) -> Result<(), PortError> {
+        let idx = u64::from_le_bytes(token.try_into().map_err(|_| PortError(2))?) as usize;
+        self.next = idx;
+        Ok(())
+    }
+}
+
+struct PreallocSnapshotPort {
+    buf: Vec<u8>,
+    len: usize,
+}
+
+impl PreallocSnapshotPort {
+    fn with_capacity(cap: usize) -> Self {
+        Self {
+            buf: vec![0; cap],
+            len: 0,
+        }
+    }
+}
+
+impl SnapshotPort for PreallocSnapshotPort {
+    fn store(
+        &mut self,
+        blob: &[u8],
+        _logical_time_ns: i64,
+        _event_count: u64,
+    ) -> Result<(), PortError> {
+        self.buf[..blob.len()].copy_from_slice(blob);
+        self.len = blob.len();
+        Ok(())
+    }
+}
+
+#[test]
+fn ac05_no_heap_allocation_during_capture_and_restore() {
+    let events: Vec<EventHeader> = (0..100).map(|i| tick(i * 2, i as u64)).collect();
+    let kernel = Kernel::create(
+        config(),
+        SeekFeed { events, next: 0 },
+        FillNextExec::new(),
+        Busy { events: 0 },
+    )
+    .unwrap();
+    let mut snap = PreallocSnapshotPort::with_capacity(65536);
+
+    reset_counts();
+    COUNTING.with(|c| c.set(true));
+    assert_eq!(
+        kernel.run(RunLimit { max_events: 40 }).status,
+        RUN_LIMIT_REACHED
+    );
+    assert_eq!(kernel.capture(&mut snap), OK);
+    assert_eq!(kernel.run(RunLimit::default()).status, STEP_FINISHED);
+    assert_eq!(kernel.restore(&snap.buf[..snap.len]), OK);
+    assert_eq!(kernel.run(RunLimit::default()).status, STEP_FINISHED);
+    COUNTING.with(|c| c.set(false));
+
+    assert_eq!(alloc_count(), 0, "capture/restore 時の確保回数");
+    assert_eq!(dealloc_count(), 0, "capture/restore 時の解放回数");
+}

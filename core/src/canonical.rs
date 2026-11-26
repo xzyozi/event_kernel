@@ -10,7 +10,7 @@ use crate::merge::MergeQueue;
 use crate::ports::{EventFeedPort, ExecutionPort, PortError};
 use crate::prng::Prng;
 use crate::queue::ActionQueue;
-use crate::status::{ERR_PANIC, ERR_PORT_FAILURE};
+use crate::status::{ERR_PANIC, ERR_PORT_FAILURE, ERR_SNAPSHOT_UNSUPPORTED};
 
 const SECTION_HEADER_SIZE: usize = 16;
 const SECTION_FLAG_REQUIRED: u16 = 0x0001;
@@ -56,12 +56,21 @@ pub(crate) struct CanonicalScratch<'a> {
     pub(crate) exec_state: &'a mut [u8],
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum CanonicalMode {
+    StepHash,
+    FullDigest,
+    SnapshotCapture,
+}
+
 /// 正準セクション列を `scratch.buf` へ書き込み、書き込んだバイト数を返す。
 pub(crate) fn write_canonical_sections<F: EventFeedPort, E: ExecutionPort>(
     inputs: &CanonicalInputs<'_, F, E>,
-    include_config_and_history: bool,
+    mode: CanonicalMode,
     scratch: &mut CanonicalScratch<'_>,
 ) -> Result<usize, Failure> {
+    let include_config_and_history = mode != CanonicalMode::StepHash;
+    let require_seekable = mode == CanonicalMode::SnapshotCapture;
     let mut cursor = Cursor::new(scratch.buf);
     let stream_count = inputs.feeds.len();
     let stream_count_u32 = u32::try_from(stream_count).map_err(|_| (ERR_PANIC, 0))?;
@@ -138,9 +147,16 @@ pub(crate) fn write_canonical_sections<F: EventFeedPort, E: ExecutionPort>(
             let pos = feed.position(scratch.feed_token).map_err(port_failure)?;
             let (entry_flags, token_len) = if pos.seekable {
                 if pos.len > scratch.feed_token.len() {
-                    return Err((ERR_PORT_FAILURE, 0));
+                    let code = if require_seekable {
+                        ERR_SNAPSHOT_UNSUPPORTED
+                    } else {
+                        ERR_PORT_FAILURE
+                    };
+                    return Err((code, 0));
                 }
                 (1u16, pos.len)
+            } else if require_seekable {
+                return Err((ERR_SNAPSHOT_UNSUPPORTED, 0));
             } else {
                 (0u16, 0usize)
             };
@@ -165,7 +181,12 @@ pub(crate) fn write_canonical_sections<F: EventFeedPort, E: ExecutionPort>(
             .capture_state(scratch.exec_state)
             .map_err(port_failure)?;
         if len > scratch.exec_state.len() {
-            return Err((ERR_PORT_FAILURE, 0));
+            let code = if require_seekable {
+                ERR_SNAPSHOT_UNSUPPORTED
+            } else {
+                ERR_PORT_FAILURE
+            };
+            return Err((code, 0));
         }
         c.write_u64(len as u64)?;
         if let Some(bytes) = scratch.exec_state.get(..len) {
