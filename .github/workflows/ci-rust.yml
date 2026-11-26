@@ -1,6 +1,6 @@
-# Rust の品質ゲート（EK-ENV-001 4.4節）。QG-001〜QG-005 を実行する。
-# QG-006（決定論性）は、状態ハッシュの実装後に追加する。QG-007、QG-012、QG-013 は、
-# core-capi と bindings/python を追加する PR で追加する。QG-008、QG-009 は定期実行で別に置く。
+# Rust の品質ゲート（EK-ENV-001 4.4節）。QG-001〜QG-006 を実行する。
+# QG-007、QG-012、QG-013 は core-capi と bindings/python を追加する PR で追加する。
+# QG-008、QG-009 は定期実行で別に置く。
 name: Rust CI
 on:
   push:
@@ -46,5 +46,5 @@ jobs:
         uses: actions/checkout@v4
       - name: Install toolchain from rust-toolchain.toml
         run: rustup toolchain install
-      - name: QG-004 and QG-005 Rust tests
+      - name: QG-004, QG-005, and QG-006 Rust tests
         run: cargo test --workspace --locked

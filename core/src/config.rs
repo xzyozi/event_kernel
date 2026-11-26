@@ -24,15 +24,15 @@ pub struct KernelConfig {
     pub price_scale_exp: i32,
     /// 数量の小数点の位置。0以下。
     pub qty_scale_exp: i32,
-    /// PRNG のシード（縦切りでは使わない）。
+    /// PRNG のシード。
     pub prng_seed: u64,
     /// `EXEC_STATE` の最大バイト数。8の倍数。
     pub exec_state_max_bytes: u32,
     /// 位置トークンの最大バイト数。1以上。
     pub feed_token_max_bytes: u32,
-    /// 状態ハッシュの間隔（縦切りでは使わない）。
+    /// 状態ハッシュの間隔（処理済みイベント数）。0は計算しない。
     pub hash_interval: u64,
-    /// トレースを出力するか。縦切りには `TraceSink` がないので、true は拒否する。
+    /// トレースを出力するか。true の場合は `TraceSink` が必要。
     pub trace_enabled: bool,
     /// `create` が確保する合計バイト数の上限。
     pub max_total_bytes: u64,
@@ -40,7 +40,7 @@ pub struct KernelConfig {
 
 impl KernelConfig {
     /// 設定を検証し、導出される確保量を返す。
-    pub(crate) fn validate(&self, stream_count: u32) -> Result<u64, i32> {
+    pub(crate) fn validate(&self, stream_count: u32, has_trace_sink: bool) -> Result<u64, i32> {
         let fields_ok = stream_count >= 1
             && self.history_ring_len >= 1
             && self.arena_size.is_multiple_of(8)
@@ -53,8 +53,7 @@ impl KernelConfig {
             && self.qty_scale_exp <= 0
             && self.exec_state_max_bytes.is_multiple_of(8)
             && self.feed_token_max_bytes >= 1
-            // `TraceSink` が登録されていない（縦切りには `TraceSink` がない）。
-            && !self.trace_enabled;
+            && (!self.trace_enabled || has_trace_sink);
         if !fields_ok {
             return Err(ERR_INVALID_ARGUMENT);
         }
@@ -79,9 +78,8 @@ impl KernelConfig {
         Ok(required)
     }
 
-    /// 確保量（EK-DD-001 2.3節）。スナップショットの最大サイズ（EK-DS-001 2.3節）と、
-    /// State Arena、履歴リング、マージキュー、アクションキューのサイズの合計。
-    fn required_bytes(&self, stream_count: u32) -> Option<u64> {
+    /// スナップショット（正準バイト列）の最大バイト数（EK-DS-001 2.3節）。
+    pub(crate) fn max_snapshot_bytes(&self, stream_count: u32) -> Option<u64> {
         let record = 32u64.checked_add(u64::from(self.payload_record_size))?;
         let streams = u64::from(stream_count);
         let queue = u64::from(self.action_queue_capacity);
@@ -89,7 +87,7 @@ impl KernelConfig {
         let token = round_up8(u64::from(self.feed_token_max_bytes))?;
         let exec_state = round_up8(u64::from(self.exec_state_max_bytes))?;
         let fixed: u64 = 64 + 16 * 9 + 64 + 24 + 40;
-        let snapshot = fixed
+        fixed
             .checked_add(self.arena_size)?
             .checked_add(streams.checked_mul(record.checked_add(8)?)?)?
             .checked_add(queue.checked_mul(record)?.checked_add(8)?)?
@@ -99,7 +97,17 @@ impl KernelConfig {
                     .checked_mul(token.checked_add(16)?)?
                     .checked_add(8)?,
             )?
-            .checked_add(exec_state.checked_add(8)?)?;
+            .checked_add(exec_state.checked_add(8)?)
+    }
+
+    /// 確保量（EK-DD-001 2.3節）。スナップショットの最大サイズ（EK-DS-001 2.3節）と、
+    /// State Arena、履歴リング、マージキュー、アクションキューのサイズの合計。
+    fn required_bytes(&self, stream_count: u32) -> Option<u64> {
+        let record = 32u64.checked_add(u64::from(self.payload_record_size))?;
+        let streams = u64::from(stream_count);
+        let queue = u64::from(self.action_queue_capacity);
+        let history = u64::from(self.history_ring_len);
+        let snapshot = self.max_snapshot_bytes(stream_count)?;
         let buffers = self
             .arena_size
             .checked_add(history.checked_mul(record)?)?
@@ -109,6 +117,6 @@ impl KernelConfig {
     }
 }
 
-fn round_up8(value: u64) -> Option<u64> {
+pub(crate) fn round_up8(value: u64) -> Option<u64> {
     Some(value.checked_add(7)? & !7)
 }
