@@ -1,0 +1,50 @@
+# Rust の品質ゲート（EK-ENV-001 4.4節）。QG-001〜QG-006 を実行する。
+# QG-007、QG-012、QG-013 は core-capi と bindings/python を追加する PR で追加する。
+# QG-008、QG-009 は定期実行で別に置く。
+name: Rust CI
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main, develop ]
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: ci-rust-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+env:
+  CARGO_TERM_COLOR: always
+jobs:
+  lint:
+    name: Rust Lint (QG-001, QG-002, QG-003)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      - name: Install toolchain from rust-toolchain.toml
+        run: rustup toolchain install
+      - name: Show toolchain
+        run: rustc -vV && cargo -V && cargo fmt --version && cargo clippy --version
+      - name: QG-001 Rust format
+        run: cargo fmt --all --check
+      - name: QG-002 Rust clippy
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
+      - name: QG-003 core crate attributes
+        run: python3 .github/scripts/check_core_attrs.py
+  test:
+    name: Rust Test (QG-004, QG-005) on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ ubuntu-latest, windows-latest ]
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      - name: Install toolchain from rust-toolchain.toml
+        run: rustup toolchain install
+      - name: QG-004, QG-005, and QG-006 Rust tests
+        run: cargo test --workspace --locked

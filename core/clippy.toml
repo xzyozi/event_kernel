@@ -1,0 +1,7 @@
+# EK-ENV-001 4.4節の QG-002 の core/ 向け追加 lint（要件定義書 6章1項、2項）。
+disallowed-types = [
+    { path = "std::time::SystemTime", reason = "論理時刻だけを使う（要件定義書 6章1項）" },
+    { path = "std::time::Instant", reason = "論理時刻だけを使う（要件定義書 6章1項）" },
+    { path = "std::collections::HashMap", reason = "走査順序が決定的でない（要件定義書 6章2項）" },
+    { path = "std::collections::HashSet", reason = "走査順序が決定的でない（要件定義書 6章2項）" },
+]

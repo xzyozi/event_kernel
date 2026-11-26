@@ -1,0 +1,5 @@
+# EK-ENV-001 4.1節。社内の Linux 計算機では rustup がないため、このファイルは無視され、
+# システムの Rust 1.97.1 が使われる。CI はこのファイルで同じ版に固定する。
+[toolchain]
+channel = "1.97.1"
+components = ["rustfmt", "clippy"]

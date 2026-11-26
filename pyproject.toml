@@ -1,0 +1,167 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+# プロジェクト固有の情報（ここだけ書き換えればOK）
+name = "my-awesome-project"  
+version = "0.1.0"
+description = "A modern Python project template"
+readme = "README.md"
+requires-python = ">=3.10"
+
+# 必須のパッケージ
+dependencies = [
+    # 例: "requests>=2.31.0",
+    # 例: "pydantic>=2.0.0"
+]
+
+[project.optional-dependencies]
+# 開発・テスト環境専用のパッケージ（uv sync --extra dev で導入）
+dev = [
+    "pytest>=8.0.0",
+    "pytest-cov>=5.0.0",
+    "ruff>=0.4.0",
+    "mypy>=1.0.0",
+]
+# ミューテーションテスト用（Linux / WSL2 / CI 専用: uv sync --extra dev --extra mutation）
+mutation = [
+    "mutmut>=3.0.0",
+]
+
+# ==========================================
+# Linter & Formatter (Ruff)
+# ==========================================
+[tool.ruff]
+line-length = 120
+exclude = [
+    ".git",
+    ".github",
+    "__pycache__",
+    "build",
+    "dist",
+    "alembic",
+    "etc",
+    "old",
+    "venv",
+    ".venv",
+    "mutants",
+    "tests" # Exclude tests folder from linting for now, as it might have specific test patterns
+]
+
+[tool.ruff.lint]
+# E: pycodestyle errors, F: Pyflakes, W: pycodestyle warnings, I: isort
+select = ["E", "F", "W", "I"]
+ignore = []
+
+[tool.ruff.lint.per-file-ignores]
+# 例: 特定ファイルのエラーを抑制する場合
+# "app/tool/__init__.py" = ["F401"]
+# "run.py" = ["E402"]
+
+[tool.ruff.lint.isort]
+# 自分のプロジェクトのパッケージ名を指定（自動ソート時にローカルパッケージとして認識させるため）
+# known-first-party = ["app"]
+force-sort-within-sections = true
+
+# ==========================================
+# Type Checker (Mypy)
+# ==========================================
+[tool.mypy]
+python_version = "3.10"
+# 基本的に厳しめの設定（Strict）にしておくのがモダンな手法
+warn_unused_configs = true
+warn_redundant_casts = true
+warn_unused_ignores = true
+show_error_codes = true
+disallow_untyped_defs = true
+disallow_incomplete_defs = true
+check_untyped_defs = true
+no_implicit_optional = true
+strict_optional = true
+# サードパーティ製ライブラリの型定義が見つからない際のエラーを抑制
+ignore_missing_imports = true
+# 元の mypy.ini ではカンマ区切りの単一文字列だったが、mypy の exclude は正規表現のため
+# 意図通りに機能させるには配列（各要素が正規表現）に変換するのが正しい書き方
+exclude = [
+    "build/",
+    "venv/",
+    "\\.venv/",
+    "alembic/",
+    "etc/",
+    "old/",
+    "mutants/",
+]
+
+# [[tool.mypy.overrides]]
+# module = "app.tool.*"
+# ignore_missing_imports = true
+
+# [[tool.mypy.overrides]]
+# module = "app.db.db_session_manager"
+# ignore_errors = true
+
+# ==========================================
+# Testing (Pytest)
+# ==========================================
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+addopts = "-v --tb=short"
+
+# ==========================================
+# Mutation Testing (mutmut v3 / Opt-in)
+# ==========================================
+# 有効化手順は docs/setup/mutation_testing_setup.md を参照。
+# 以下の [tool.mutmut] をアンコメントし uv lock でロックファイルを更新すると、
+# .github/workflows/mutation-pr.yml および mutation-nightly.yml が自動有効化される。
+#
+# [tool.mutmut]
+# # 対象ソースコードのルート（src/ または app/ に合わせて変更）
+# source_paths = ["src/"]
+#
+# # I/O を持たない純粋ロジック・重要ドメインに限定する
+# only_mutate = [
+#     "src/my_app/domain/*",
+#     "src/my_app/pricing/*",
+# ]
+# do_not_mutate = [
+#     "*__init__.py",
+#     "*migrations*",
+#     "*cli.py",
+# ]
+#
+# # ログ文言などの低価値ノイズを除外（raise は例外型検証の見逃しを防ぐため必要時のみ追加）
+# do_not_mutate_patterns = [
+#     'logger\.\w+',
+# ]
+#
+# # カバレッジ計測済みの行だけ変異させる（pytest-cov / coverage.py 必須）
+# mutate_only_covered_lines = true
+#
+# # 高速なユニットテストだけを対象にする
+# pytest_add_cli_args_test_selection = [
+#     "-m", "not integration and not slow",
+#     "tests/unit/",
+# ]
+#
+# # 呼び出しスタックが深い間接テストを除外して高速化
+# max_stack_depth = 8
+#
+# # 型チェックで落ちる無意味なミュータントを事前除外（mypy または pyrefly に対応）
+# type_check_command = [
+#     "mypy", "src", "--output", "json", "--disable-error-code", "unused-ignore",
+# ]
+#
+# # テスト実行に必要な補助ファイルがあればコピー対象に追加
+# also_copy = [
+#     "tests/conftest.py",
+# ]
+#
+# # grpc / torch / gevent / 非同期イベントループ等でハングする場合は forkserver を指定
+# # process_isolation = "forkserver"
+
+# Python のパッケージはない。Rust の core/ と templates/ を、setuptools の自動探索で
+# パッケージとして拾わないようにする（flat-layout の複数パッケージのエラーを防ぐ）。
+[tool.setuptools]
+packages = []

@@ -1,0 +1,17 @@
+[package]
+name = "event-kernel-core"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+publish = false
+description = "Deterministic Event Kernel のカーネルコア（no_std、forbid(unsafe_code)）"
+
+# パッケージ名を `core` にすると、Rust 組み込みの `core` クレートと名前が衝突するため、
+# ライブラリ名は `ek_core` とする。
+[lib]
+name = "ek_core"
+path = "src/lib.rs"
+
+[[bench]]
+name = "step_throughput"
+harness = false
