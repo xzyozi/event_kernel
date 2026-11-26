@@ -11,6 +11,7 @@ use crate::event::{
 };
 use crate::hash::{sha256, xxh3_64};
 use crate::history::{HistoryRing, HistoryView};
+use crate::merge::MergeQueue;
 use crate::ports::{EventFeedPort, ExecutionPort, NoTraceSink, PortError, Strategy, TraceSink};
 use crate::prng::Prng;
 use crate::queue::ActionQueue;
@@ -20,9 +21,6 @@ use crate::util::copy_bytes;
 
 /// 最初のイベントを処理するまでの論理時刻（`i64` の最小値）。
 pub const CLOCK_UNSET_NS: i64 = i64::MIN;
-
-/// 外部フィードの `stream_id`。縦切りでは、外部フィードは1本だけである。
-const FEED_STREAM_ID: u32 = 0;
 
 /// ハンドルの状態（EK-DD-001 3.2節）。`Running` は、ステップの実行中に外から観測したときだけ返る。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -156,13 +154,11 @@ struct Inner<F, E, S, T> {
     next_action_sequence_id: u64,
     rng: Prng,
     last_event_flags: u16,
-    feed: F,
+    feeds: Vec<F>,
     exec: E,
     strategy: S,
     trace: T,
-    head_present: bool,
-    head_header: EventHeader,
-    head_payload: Vec<u8>,
+    merge: MergeQueue,
     current_header: EventHeader,
     current_payload: Vec<u8>,
     result_header: EventHeader,
@@ -189,10 +185,20 @@ where
     E: ExecutionPort,
     S: Strategy,
 {
-    /// トレース出力なしのカーネルを作成する（F-001）。
+    /// 単一外部フィード・トレース出力なしのカーネルを作成する（F-001）。
     /// `config.trace_enabled` が true の場合は `ERR_INVALID_ARGUMENT` を返す。
     pub fn create(config: KernelConfig, feed: F, exec: E, strategy: S) -> Result<Self, i32> {
-        Kernel::create_with_trace(config, feed, exec, strategy, NoTraceSink)
+        Kernel::create_multi_with_trace(config, vec![feed], exec, strategy, NoTraceSink)
+    }
+
+    /// 複数外部フィード・トレース出力なしのカーネルを作成する（F-001）。
+    pub fn create_multi(
+        config: KernelConfig,
+        feeds: Vec<F>,
+        exec: E,
+        strategy: S,
+    ) -> Result<Self, i32> {
+        Kernel::create_multi_with_trace(config, feeds, exec, strategy, NoTraceSink)
     }
 }
 
@@ -203,15 +209,30 @@ where
     S: Strategy,
     T: TraceSink,
 {
-    /// `TraceSink` を伴うカーネルを作成する（F-001）。確保は、この関数に限る。失敗時はハンドルを作らない。
+    /// 単一外部フィード・`TraceSink` 付きのカーネルを作成する（F-001）。
     pub fn create_with_trace(
         config: KernelConfig,
-        mut feed: F,
+        feed: F,
+        exec: E,
+        strategy: S,
+        trace: T,
+    ) -> Result<Self, i32> {
+        Self::create_multi_with_trace(config, vec![feed], exec, strategy, trace)
+    }
+
+    /// 複数外部フィード・`TraceSink` 付きのカーネルを作成する（F-001）。
+    /// 登録順が `stream_id`（`0..stream_count - 1`）になる。確保は、この関数に限る。
+    pub fn create_multi_with_trace(
+        config: KernelConfig,
+        mut feeds: Vec<F>,
         exec: E,
         strategy: S,
         mut trace: T,
     ) -> Result<Self, i32> {
-        config.validate(1, trace.is_present())?;
+        let stream_count = u32::try_from(feeds.len()).map_err(|_| ERR_CAPACITY_EXCEEDED)?;
+        config.validate(stream_count, trace.is_present())?;
+
+        let stream_count_usize = feeds.len();
         let payload_len =
             usize::try_from(config.payload_record_size).map_err(|_| ERR_CAPACITY_EXCEEDED)?;
         let queue_len =
@@ -220,7 +241,7 @@ where
             usize::try_from(config.history_ring_len).map_err(|_| ERR_CAPACITY_EXCEEDED)?;
         let arena_len = usize::try_from(config.arena_size).map_err(|_| ERR_CAPACITY_EXCEEDED)?;
         let snapshot_len = config
-            .max_snapshot_bytes(1)
+            .max_snapshot_bytes(stream_count)
             .and_then(|n| usize::try_from(n).ok())
             .ok_or(ERR_CAPACITY_EXCEEDED)?;
         let feed_token_len =
@@ -228,13 +249,20 @@ where
         let exec_state_len =
             usize::try_from(config.exec_state_max_bytes).map_err(|_| ERR_CAPACITY_EXCEEDED)?;
 
+        let mut merge =
+            MergeQueue::new(stream_count_usize, payload_len).ok_or(ERR_CAPACITY_EXCEEDED)?;
         let queue = ActionQueue::new(queue_len, payload_len).ok_or(ERR_CAPACITY_EXCEEDED)?;
         let history = HistoryRing::new(history_len, payload_len).ok_or(ERR_CAPACITY_EXCEEDED)?;
 
-        let mut head_header = EventHeader::default();
-        let mut head_payload = vec![0u8; payload_len];
-        let head_present =
-            intake(&mut feed, &mut head_header, &mut head_payload).map_err(|(code, _)| code)?;
+        for (feed_idx, feed) in feeds.iter_mut().enumerate() {
+            let expected_stream_id = u32::try_from(feed_idx).map_err(|_| ERR_CAPACITY_EXCEEDED)?;
+            let Some((header, payload)) = merge.slot_mut(feed_idx) else {
+                return Err(ERR_PANIC);
+            };
+            let present =
+                intake(feed, expected_stream_id, header, payload).map_err(|(code, _)| code)?;
+            merge.set_initial_present(feed_idx, present);
+        }
 
         if config.trace_enabled {
             trace
@@ -251,13 +279,11 @@ where
                 next_action_sequence_id: 0,
                 rng: Prng::from_seed(config.prng_seed),
                 last_event_flags: 0,
-                feed,
+                feeds,
                 exec,
                 strategy,
                 trace,
-                head_present,
-                head_header,
-                head_payload,
+                merge,
                 current_header: EventHeader::default(),
                 current_payload: vec![0; payload_len],
                 result_header: EventHeader::default(),
@@ -350,10 +376,19 @@ where
             .map_or(HandleState::Running, |inner| inner.state)
     }
 
-    /// ポートと戦略を読み取る。ステップの実行中は `ERR_REENTRANT`。
+    /// 先頭フィード、約定ポート、戦略を読み取る。ステップの実行中は `ERR_REENTRANT`。
     pub fn inspect<R>(&self, read: impl FnOnce(&F, &E, &S) -> R) -> Result<R, i32> {
         let inner = self.inner.try_borrow().map_err(|_| ERR_REENTRANT)?;
-        Ok(read(&inner.feed, &inner.exec, &inner.strategy))
+        let Some(first_feed) = inner.feeds.first() else {
+            return Err(ERR_PANIC);
+        };
+        Ok(read(first_feed, &inner.exec, &inner.strategy))
+    }
+
+    /// 全外部フィード、約定ポート、戦略を読み取る。ステップの実行中は `ERR_REENTRANT`。
+    pub fn inspect_feeds<R>(&self, read: impl FnOnce(&[F], &E, &S) -> R) -> Result<R, i32> {
+        let inner = self.inner.try_borrow().map_err(|_| ERR_REENTRANT)?;
+        Ok(read(&inner.feeds, &inner.exec, &inner.strategy))
     }
 
     /// トレース出力先を読み取る。ステップの実行中は `ERR_REENTRANT`。
@@ -368,16 +403,30 @@ where
         Ok(inner.config)
     }
 
-    /// ハンドルを破棄し、ポートと戦略を返す（F-007）。
+    /// ハンドルを破棄し、先頭フィード・約定ポート・戦略を返す（F-007）。
     pub fn destroy(self) -> (F, E, S) {
-        let inner = self.inner.into_inner();
-        (inner.feed, inner.exec, inner.strategy)
+        let mut inner = self.inner.into_inner();
+        let first = inner.feeds.swap_remove(0);
+        (first, inner.exec, inner.strategy)
     }
 
-    /// ハンドルを破棄し、トレース出力先を含むポートと戦略を返す（F-007）。
-    pub fn destroy_with_trace(self) -> (F, E, S, T) {
+    /// ハンドルを破棄し、全フィード・約定ポート・戦略を返す（F-007）。
+    pub fn destroy_multi(self) -> (Vec<F>, E, S) {
         let inner = self.inner.into_inner();
-        (inner.feed, inner.exec, inner.strategy, inner.trace)
+        (inner.feeds, inner.exec, inner.strategy)
+    }
+
+    /// ハンドルを破棄し、先頭フィード・約定ポート・戦略・トレース出力先を返す（F-007）。
+    pub fn destroy_with_trace(self) -> (F, E, S, T) {
+        let mut inner = self.inner.into_inner();
+        let first = inner.feeds.swap_remove(0);
+        (first, inner.exec, inner.strategy, inner.trace)
+    }
+
+    /// ハンドルを破棄し、全フィード・約定ポート・戦略・トレース出力先を返す（F-007）。
+    pub fn destroy_multi_with_trace(self) -> (Vec<F>, E, S, T) {
+        let inner = self.inner.into_inner();
+        (inner.feeds, inner.exec, inner.strategy, inner.trace)
     }
 }
 
@@ -393,6 +442,7 @@ fn reentrant() -> StepResult {
 /// 外部フィードから次のイベントを取り込む。`Ok(false)` は終端。
 fn intake<F: EventFeedPort>(
     feed: &mut F,
+    expected_stream_id: u32,
     header: &mut EventHeader,
     payload: &mut [u8],
 ) -> Result<bool, Failure> {
@@ -403,7 +453,7 @@ fn intake<F: EventFeedPort>(
     feed.pop_next(header, payload).map_err(port_failure)?;
     // DD に定めのない検査（縦切り計画 H4 の記録を参照）。
     if header.timestamp_ns != timestamp_ns
-        || header.stream_id != FEED_STREAM_ID
+        || header.stream_id != expected_stream_id
         || !event_type::is_market(header.event_type)
     {
         return Err((ERR_PORT_FAILURE, 0));
@@ -435,11 +485,9 @@ where
             processed_event_count,
             next_action_sequence_id,
             rng,
-            feed,
+            feeds,
             exec,
-            head_present,
-            head_header,
-            head_payload,
+            merge,
             queue,
             history,
             arena,
@@ -456,13 +504,10 @@ where
             next_action_sequence_id: *next_action_sequence_id,
             rng,
             arena,
-            head_present: *head_present,
-            head_header: *head_header,
-            head_payload,
-            feed_stream_id: FEED_STREAM_ID,
+            merge,
             queue,
             history,
-            feed,
+            feeds,
             exec,
         };
         let mut scratch = CanonicalScratch {
@@ -556,25 +601,35 @@ where
             HandleState::Ready | HandleState::Running => {}
         }
         // 手順2: 最小のイベントを選ぶ。
-        let from_feed = match (self.head_present, self.queue.peek_header()) {
-            (false, None) => {
+        let chosen_feed = match (self.merge.peek(), self.queue.peek_header()) {
+            (None, None) => {
                 self.state = HandleState::Finished;
                 return self.result(STEP_FINISHED, 0);
             }
-            (true, None) => true,
-            (false, Some(_)) => false,
-            (true, Some(queued)) => self.head_header.order_key() <= queued.order_key(),
-        };
-        let header = if from_feed {
-            self.head_header
-        } else {
-            if !self
-                .queue
-                .pop_into(&mut self.current_header, &mut self.current_payload)
-            {
-                return self.poison((ERR_PANIC, 0));
+            (Some((feed_idx, _)), None) => Some(feed_idx),
+            (None, Some(_)) => None,
+            (Some((feed_idx, feed_head)), Some(queued)) => {
+                if feed_head.order_key() <= queued.order_key() {
+                    Some(feed_idx)
+                } else {
+                    None
+                }
             }
-            self.current_header
+        };
+        let header = match chosen_feed {
+            Some(feed_idx) => match self.merge.head_entry(feed_idx) {
+                Some((_, header, _)) => header,
+                None => return self.poison((ERR_PANIC, 0)),
+            },
+            None => {
+                if !self
+                    .queue
+                    .pop_into(&mut self.current_header, &mut self.current_payload)
+                {
+                    return self.poison((ERR_PANIC, 0));
+                }
+                self.current_header
+            }
         };
         // 手順3: 時刻の検証（防御的）。
         if header.timestamp_ns < self.now_ns {
@@ -584,12 +639,14 @@ where
         self.now_ns = header.timestamp_ns;
         self.last_event_flags = header.flags;
         // 手順5〜7。
-        if let Err(failure) = self.dispatch(from_feed, header) {
+        if let Err(failure) = self.dispatch(chosen_feed, header) {
             return self.poison(failure);
         }
         self.processed_event_count += 1;
-        // 手順8: 先頭の補充と検証。
-        if from_feed && let Err(failure) = self.refill(header) {
+        // 手順8: 選んだ外部フィードの先頭を補充し、直前イベントと比較検証する。
+        if let Some(feed_idx) = chosen_feed
+            && let Err(failure) = self.refill(feed_idx, header)
+        {
             return self.poison(failure);
         }
         // 手順9: トレースと状態ハッシュ（EK-DD-001 3.1節）。
@@ -633,7 +690,7 @@ where
     }
 
     /// 手順5〜7: `ExecutionPort`、履歴、戦略への配送。
-    fn dispatch(&mut self, from_feed: bool, header: EventHeader) -> Result<(), Failure> {
+    fn dispatch(&mut self, chosen_feed: Option<usize>, header: EventHeader) -> Result<(), Failure> {
         let Inner {
             config,
             now_ns,
@@ -641,7 +698,7 @@ where
             rng,
             exec,
             strategy,
-            head_payload,
+            merge,
             current_payload,
             result_header,
             result_payload,
@@ -651,10 +708,9 @@ where
             ..
         } = self;
         let now_ns = *now_ns;
-        let payload: &[u8] = if from_feed {
-            head_payload
-        } else {
-            current_payload
+        let payload: &[u8] = match chosen_feed {
+            Some(feed_idx) => merge.head_payload(feed_idx),
+            None => current_payload,
         };
         let event = EventRecord { header, payload };
         let kind = header.event_type;
@@ -726,17 +782,21 @@ where
         Ok(())
     }
 
-    /// 手順8: 外部フィードの先頭を補充し、今のイベントと比べて検証する。
-    fn refill(&mut self, current: EventHeader) -> Result<(), Failure> {
-        self.head_present = intake(
-            &mut self.feed,
-            &mut self.head_header,
-            &mut self.head_payload,
-        )?;
-        if !self.head_present {
+    /// 手順8: 選んだ外部フィードの先頭を補充し、今のイベントと比べて検証する。
+    fn refill(&mut self, feed_idx: usize, current: EventHeader) -> Result<(), Failure> {
+        let Some(feed) = self.feeds.get_mut(feed_idx) else {
+            return Err((ERR_PANIC, 0));
+        };
+        let expected_stream_id = u32::try_from(feed_idx).map_err(|_| (ERR_PANIC, 0))?;
+        let Some((header, payload)) = self.merge.slot_mut(feed_idx) else {
+            return Err((ERR_PANIC, 0));
+        };
+        let is_present = intake(feed, expected_stream_id, header, payload)?;
+        let next = *header;
+        self.merge.update_root_after_refill(is_present);
+        if !is_present {
             return Ok(());
         }
-        let next = self.head_header;
         if next.timestamp_ns < current.timestamp_ns {
             return Err((ERR_CAUSALITY_VIOLATION, 0));
         }

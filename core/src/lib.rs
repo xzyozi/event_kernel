@@ -19,6 +19,7 @@ pub mod event;
 mod hash;
 mod history;
 mod kernel;
+mod merge;
 pub mod ports;
 mod prng;
 mod queue;

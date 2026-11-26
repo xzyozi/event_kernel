@@ -6,6 +6,7 @@
 use crate::config::KernelConfig;
 use crate::event::EventHeader;
 use crate::history::HistoryRing;
+use crate::merge::MergeQueue;
 use crate::ports::{EventFeedPort, ExecutionPort, PortError};
 use crate::prng::Prng;
 use crate::queue::ActionQueue;
@@ -41,13 +42,10 @@ pub(crate) struct CanonicalInputs<'a, F, E> {
     pub(crate) next_action_sequence_id: u64,
     pub(crate) rng: &'a Prng,
     pub(crate) arena: &'a [u8],
-    pub(crate) head_present: bool,
-    pub(crate) head_header: EventHeader,
-    pub(crate) head_payload: &'a [u8],
-    pub(crate) feed_stream_id: u32,
+    pub(crate) merge: &'a MergeQueue,
     pub(crate) queue: &'a ActionQueue,
     pub(crate) history: &'a HistoryRing,
-    pub(crate) feed: &'a F,
+    pub(crate) feeds: &'a [F],
     pub(crate) exec: &'a E,
 }
 
@@ -65,9 +63,13 @@ pub(crate) fn write_canonical_sections<F: EventFeedPort, E: ExecutionPort>(
     scratch: &mut CanonicalScratch<'_>,
 ) -> Result<usize, Failure> {
     let mut cursor = Cursor::new(scratch.buf);
+    let stream_count = inputs.feeds.len();
+    let stream_count_u32 = u32::try_from(stream_count).map_err(|_| (ERR_PANIC, 0))?;
 
     if include_config_and_history {
-        cursor.write_section(SECTION_CONFIG, |c| write_config(c, inputs.config, 1))?;
+        cursor.write_section(SECTION_CONFIG, |c| {
+            write_config(c, inputs.config, stream_count_u32)
+        })?;
     }
 
     cursor.write_section(SECTION_CLOCK, |c| {
@@ -89,14 +91,20 @@ pub(crate) fn write_canonical_sections<F: EventFeedPort, E: ExecutionPort>(
     cursor.write_section(SECTION_STATE_ARENA, |c| c.write_bytes(inputs.arena))?;
 
     cursor.write_section(SECTION_MERGE_HEADS, |c| {
-        if inputs.head_present {
-            c.write_u8(1)?;
-            c.write_zeros(7)?;
-            write_event_record(c, inputs.head_header, inputs.head_payload)
-        } else {
-            c.write_u8(0)?;
-            c.write_zeros(7)
+        for feed_idx in 0..inputs.merge.stream_count() {
+            let Some((present, header, payload)) = inputs.merge.head_entry(feed_idx) else {
+                return Err((ERR_PANIC, 0));
+            };
+            if present {
+                c.write_u8(1)?;
+                c.write_zeros(7)?;
+                write_event_record(c, header, payload)?;
+            } else {
+                c.write_u8(0)?;
+                c.write_zeros(7)?;
+            }
         }
+        Ok(())
     })?;
 
     cursor.write_section(SECTION_ACTION_QUEUE, |c| {
@@ -123,30 +131,32 @@ pub(crate) fn write_canonical_sections<F: EventFeedPort, E: ExecutionPort>(
     }
 
     cursor.write_section(SECTION_FEED_STATES, |c| {
-        c.write_u64(1)?;
-        let pos = inputs
-            .feed
-            .position(scratch.feed_token)
-            .map_err(port_failure)?;
-        let (entry_flags, token_len) = if pos.seekable {
-            if pos.len > scratch.feed_token.len() {
+        c.write_u64(stream_count as u64)?;
+        // `stream_id` は登録添字 `0..stream_count` のため、この走査が `stream_id` 昇順になる。
+        for (feed_idx, feed) in inputs.feeds.iter().enumerate() {
+            let stream_id = u32::try_from(feed_idx).map_err(|_| (ERR_PANIC, 0))?;
+            let pos = feed.position(scratch.feed_token).map_err(port_failure)?;
+            let (entry_flags, token_len) = if pos.seekable {
+                if pos.len > scratch.feed_token.len() {
+                    return Err((ERR_PORT_FAILURE, 0));
+                }
+                (1u16, pos.len)
+            } else {
+                (0u16, 0usize)
+            };
+            let token_u32 = u32::try_from(token_len).map_err(|_| (ERR_PORT_FAILURE, 0))?;
+            c.write_u32(stream_id)?;
+            c.write_u32(token_u32)?;
+            c.write_u16(entry_flags)?;
+            c.write_zeros(6)?;
+            if let Some(token) = scratch.feed_token.get(..token_len) {
+                c.write_bytes(token)?;
+            } else {
                 return Err((ERR_PORT_FAILURE, 0));
             }
-            (1u16, pos.len)
-        } else {
-            (0u16, 0usize)
-        };
-        let token_u32 = u32::try_from(token_len).map_err(|_| (ERR_PORT_FAILURE, 0))?;
-        c.write_u32(inputs.feed_stream_id)?;
-        c.write_u32(token_u32)?;
-        c.write_u16(entry_flags)?;
-        c.write_zeros(6)?;
-        if let Some(token) = scratch.feed_token.get(..token_len) {
-            c.write_bytes(token)?;
-        } else {
-            return Err((ERR_PORT_FAILURE, 0));
+            c.write_zeros(pad_to_8(token_len))?;
         }
-        c.write_zeros(pad_to_8(token_len))
+        Ok(())
     })?;
 
     cursor.write_section(SECTION_EXEC_STATE, |c| {

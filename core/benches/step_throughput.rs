@@ -165,12 +165,11 @@ impl TraceSink for CountingTraceSink {
     }
 }
 
-fn run_bench(
+fn run_bench_streams(
     label: &str,
     events: usize,
     runs: usize,
-    headers: &[EventHeader],
-    payloads: &[u8],
+    streams: &[(&[EventHeader], &[u8])],
     hash_interval: u64,
     trace_enabled: bool,
 ) {
@@ -193,11 +192,14 @@ fn run_bench(
 
     let mut rates = Vec::with_capacity(runs);
     for run in 0..runs {
-        let feed = SliceFeed {
-            headers,
-            payloads,
-            next: 0,
-        };
+        let feeds: Vec<SliceFeed<'_>> = streams
+            .iter()
+            .map(|&(headers, payloads)| SliceFeed {
+                headers,
+                payloads,
+                next: 0,
+            })
+            .collect();
         let strategy = BenchStrategy {
             window: [0; MA_LEN],
             pos: 0,
@@ -210,14 +212,19 @@ fn run_bench(
             count: 0,
             last_hash: 0,
         };
-        let kernel =
-            Kernel::create_with_trace(config, feed, NextEventFill::default(), strategy, sink)
-                .unwrap_or_else(|code| panic!("create failed: {code}"));
+        let kernel = Kernel::create_multi_with_trace(
+            config,
+            feeds,
+            NextEventFill::default(),
+            strategy,
+            sink,
+        )
+        .unwrap_or_else(|code| panic!("create failed: {code}"));
         let start = Instant::now();
         let result = kernel.run(RunLimit::default());
         let elapsed = start.elapsed();
         assert_eq!(result.status, STEP_FINISHED, "run failed: {result:?}");
-        let (_, exec, strategy, trace) = kernel.destroy_with_trace();
+        let (_, exec, strategy, trace) = kernel.destroy_multi_with_trace();
         let rate = result.processed_event_count as f64 / elapsed.as_secs_f64();
         println!(
             "[{label}] run {run}: processed={} market={} fills={} signals={} trace_count={} last_hash={:#018x} elapsed={:.3}s rate={:.0} events/s",
@@ -248,8 +255,18 @@ fn main() {
     // 入力の展開（計測に含めない）。時刻は2ナノ秒刻みで、価格は決定的な疑似乱数。
     let mut headers = Vec::with_capacity(events);
     let mut payloads = vec![0u8; events * PAYLOAD];
+    let half = events / 2;
+    let mut headers_a = Vec::with_capacity(half);
+    let mut payloads_a = vec![0u8; half * PAYLOAD];
+    let mut headers_b = Vec::with_capacity(events - half);
+    let mut payloads_b = vec![0u8; (events - half) * PAYLOAD];
     let mut x: u64 = 0x9E37_79B9_7F4A_7C15;
     for i in 0..events {
+        x ^= x << 13;
+        x ^= x >> 7;
+        x ^= x << 17;
+        let price = 10_000 + (x % 200) as i64;
+        let price_bytes = price.to_le_bytes();
         headers.push(EventHeader {
             timestamp_ns: (i as i64) * 2,
             sequence_id: i as u64,
@@ -258,20 +275,47 @@ fn main() {
             flags: 0,
             payload_idx: i as u64,
         });
-        x ^= x << 13;
-        x ^= x >> 7;
-        x ^= x << 17;
-        let price = 10_000 + (x % 200) as i64;
-        payloads[i * PAYLOAD..i * PAYLOAD + 8].copy_from_slice(&price.to_le_bytes());
+        payloads[i * PAYLOAD..i * PAYLOAD + 8].copy_from_slice(&price_bytes);
+
+        // 2ストリーム構成（要件定義書 8章: 計1,000万イベント。同時刻タイブレークも含む）。
+        let ts = ((i / 2) as i64) * 2;
+        if i % 2 == 0 && headers_a.len() < half {
+            let idx = headers_a.len();
+            headers_a.push(EventHeader {
+                timestamp_ns: ts,
+                sequence_id: idx as u64,
+                stream_id: 0,
+                event_type: event_type::TICK,
+                flags: 0,
+                payload_idx: idx as u64,
+            });
+            payloads_a[idx * PAYLOAD..idx * PAYLOAD + 8].copy_from_slice(&price_bytes);
+        } else {
+            let idx = headers_b.len();
+            headers_b.push(EventHeader {
+                timestamp_ns: ts,
+                sequence_id: idx as u64,
+                stream_id: 1,
+                event_type: event_type::TICK,
+                flags: 0,
+                payload_idx: idx as u64,
+            });
+            payloads_b[idx * PAYLOAD..idx * PAYLOAD + 8].copy_from_slice(&price_bytes);
+        }
     }
 
-    run_bench("baseline", events, runs, &headers, &payloads, 0, false);
-    run_bench(
-        "trace+xxh3(10k)",
+    let single = [(&headers[..], &payloads[..])];
+    let dual = [
+        (&headers_a[..], &payloads_a[..]),
+        (&headers_b[..], &payloads_b[..]),
+    ];
+    run_bench_streams("baseline", events, runs, &single, 0, false);
+    run_bench_streams("trace+xxh3(10k)", events, runs, &single, 10_000, true);
+    run_bench_streams(
+        "2-stream+trace+xxh3(10k)",
         events,
         runs,
-        &headers,
-        &payloads,
+        &dual,
         10_000,
         true,
     );
