@@ -4,11 +4,11 @@ document_type: "document_governance"
 document_role: "normative"
 ssot_scope: "document_governance"
 status: "approved"
-version: "1.0"
+version: "1.1"
 created_at: "2026-10-02"
-updated_at: "2026-11-05"
-author: "[作成者 / チーム名]"
-owner: "[ドキュメント責任者 / チーム名]"
+updated_at: "2026-11-27"
+author: "xzyozi"
+owner: "xzyozi"
 purpose: "プロジェクト全体の文書分類、SSOT、メタデータ、ライフサイクル、参照規約を定義するため"
 related_documents:
   - "用語集（相対パス: ../CONTEXT.md）"
@@ -170,9 +170,12 @@ related_documents:
 | 検証       | `TEST`              | `test_plan_report`             |      任意       | テスト計画・結果   |
 | 判断理由   | `ADR`               | `architecture_decision_record` |    原則必須     | ADR                |
 | Issue記録  | `ISSUE`             | `issue_record`                 |      不要       | Issueの写し        |
+| 要求仕様   | `REQ`               | `requirements_specification`   |      不要       | 要件定義・要求仕様 |
 | 環境仕様   | `ENV`               | `environment_specification`    |      必須       | 環境・開発基盤仕様 |
 | 環境手順   | `SETUP`             | `environment_setup_procedure`  |      任意       | 環境構築手順       |
-| その他候補 | `REQ` / `AN` / `RV` | 対応する種別を追加             |  必要に応じる   | 必要時に登録       |
+| 分析       | `AN`                | `analysis`                     |      不要       | 調査・分析・計画   |
+| 運用案内   | `GUIDE`             | `directory_guide`              |      不要       | ディレクトリ運用   |
+| その他候補 | `RV`                | 対応する種別を追加             |  必要に応じる   | レビュー記録等     |
 
 #### 形式文書の命名
 

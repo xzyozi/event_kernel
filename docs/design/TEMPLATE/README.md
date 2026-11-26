@@ -1,3 +1,20 @@
+---
+title: "設計書テンプレート運用ガイド"
+document_type: "directory_guide"
+document_role: "procedure"
+ssot_scope: "design_template_operation"
+status: "approved"
+version: "1.0"
+created_at: "2026-10-02"
+updated_at: "2026-11-27"
+author: "xzyozi"
+owner: "xzyozi"
+purpose: "設計書テンプレート（BD/DD/DS/IF）の選択方法、Frontmatter・Mermaid図の記入規約を定義するため"
+related_documents:
+  - "ドキュメントガバナンス（相対パス: ../../README.md）"
+  - "ADR-001 文書ガバナンスとSSOT（相対パス: ../../adr/001-document-governance-and-ssot.md）"
+---
+
 # 設計書テンプレート運用ガイド
 
 > プロジェクト全体の文書分類、SSOT、Frontmatter、ライフサイクルは [`docs/README.md`](../../README.md) を正本とします。本書はBD/DD/DS/IFテンプレート固有の選択方法・記入規約を定義します。

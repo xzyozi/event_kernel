@@ -7,9 +7,9 @@ ssot_scope: "document_governance"
 status: "accepted"
 version: "1.0"
 created_at: "2026-10-02"
-updated_at: "2026-10-02"
-author: "[作成者 / チーム名]"
-owner: "[責任者 / チーム名]"
+updated_at: "2026-11-27"
+author: "xzyozi"
+owner: "xzyozi"
 purpose: "プロジェクト文書の分類、SSOT、メタデータ配置、BD/DD/DSと他文書の責務境界を決定するため"
 related_documents:
   - "ドキュメントガバナンス（相対パス: ../README.md）"
@@ -21,7 +21,7 @@ related_documents:
 - **ステータス**: Accepted
 - **決定日**: 2026-10-02
 - **決定対象**: `docs/` 配下の文書分類、正本、メタデータ配置
-- **関連Issue**: [なし、または Issue番号・URL]
+- **関連Issue**: なし
 
 ## 1. 背景
 
