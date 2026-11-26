@@ -5,7 +5,7 @@ document_number: "EK-BD-001"
 document_role: "normative"
 ssot_scope: "system_architecture"
 status: "draft"
-version: "0.6"
+version: "0.7"
 created_at: "2026-11-24"
 updated_at: "2026-11-24"
 author: "xzyozi"
@@ -171,21 +171,21 @@ flowchart TD
 ```mermaid
 sequenceDiagram
     participant Feed as EventFeedPort
-    participant Loop as イベントループ
+    participant EvLoop as イベントループ
     participant Clock as ClockPort
     participant Strat as 戦略
     participant Exec as ExecutionPort
     participant Trace as トレース出力
 
-    Loop->>Feed: 次のイベントを取得（マージ済み）
-    Loop->>Loop: 因果律を検証
-    Loop->>Clock: 時刻を進める
-    Loop->>Strat: イベントとコンテキストを配送
-    Strat->>Loop: アクションを提出
-    Loop->>Loop: レイテンシを加算し到達イベントを登録
-    Loop->>Exec: 到達時刻以降に確定済みの市場データを渡す
-    Exec-->>Loop: 約定結果（Fillなど）を返す
-    Loop->>Trace: イベントID、時刻、状態ハッシュ
+    EvLoop->>Feed: 次のイベントを取得（マージ済み）
+    EvLoop->>EvLoop: 因果律を検証
+    EvLoop->>Clock: 時刻を進める
+    EvLoop->>Strat: イベントとコンテキストを配送
+    Strat->>EvLoop: アクションを提出
+    EvLoop->>EvLoop: レイテンシを加算し到達イベントを登録
+    EvLoop->>Exec: 到達時刻以降に確定済みの市場データを渡す
+    Exec-->>EvLoop: 約定結果（Fillなど）を返す
+    EvLoop->>Trace: イベントID、時刻、状態ハッシュ
 ```
 
 - 因果律違反を検出した場合は、イベントを処理せずに停止する（2.4節）。
@@ -321,3 +321,4 @@ stateDiagram-v2
 | Rev.0.4 | 2026-11-24 | xzyozi | `restore` の途中失敗を `Poisoned` とする方針、同一市場イベントでの処理順序（約定判定、戦略通知の順）、DD・DS・IF/API への引き継ぎ事項（4.2節）を追加。C-003 の依存先と 4.1節の観点を、本文に合わせて修正。                                |
 | Rev.0.5 | 2026-11-24 | xzyozi | 環境・開発基盤仕様書 EK-ENV-001 の作成に伴い、品質ゲートの正本への参照を追加。                                                                                                                                                            |
 | Rev.0.6 | 2026-11-24 | xzyozi | 3.1節の環境情報（Rust と Python のバージョン、依存管理）を、EK-ENV-001 への参照に置き換えた。二重管理を避けるため。                                                                                                                       |
+| Rev.0.7 | 2026-11-25 | xzyozi | 2.3節のシーケンス図で、参加者名 `Loop` が予約語 `loop` と衝突して Mermaid の構文エラーになるため、`EvLoop` に変更した。                                                                                                                   |
