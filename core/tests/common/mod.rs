@@ -205,16 +205,17 @@ impl Strategy for RecordingStrategy {
                 history.latest().map(|e| e.header.timestamp_ns),
             ));
         }
-        if let Some((at, latency_ns)) = self.submit_on {
-            if at == h.timestamp_ns && event_type::is_market(h.event_type) {
-                let status = context.submit_action(&Action {
-                    action_kind: 1,
-                    latency_ns,
-                    payload: &[9],
-                });
-                if self.submit_status.len() < self.submit_status.capacity() {
-                    self.submit_status.push(status);
-                }
+        if let Some((at, latency_ns)) = self.submit_on
+            && at == h.timestamp_ns
+            && event_type::is_market(h.event_type)
+        {
+            let status = context.submit_action(&Action {
+                action_kind: 1,
+                latency_ns,
+                payload: &[9],
+            });
+            if self.submit_status.len() < self.submit_status.capacity() {
+                self.submit_status.push(status);
             }
         }
         match self.fail_on {

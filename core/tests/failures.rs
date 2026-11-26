@@ -92,9 +92,12 @@ fn kernel_with(feed: VecFeed) -> TestKernel {
     kernel(feed, RecordingStrategy::new())
 }
 
+/// 再入を試すコールバック。テストの本体が、ハンドルへの弱参照を入れる。
+type ReenterCall = Rc<RefCell<Option<Box<dyn Fn() -> (i32, i32, HandleState)>>>>;
+
 /// コールバックから、ハンドルの操作を呼ぶ戦略。
 struct Reenter {
-    call: Rc<RefCell<Option<Box<dyn Fn() -> (i32, i32, HandleState)>>>>,
+    call: ReenterCall,
     observed: Vec<(i32, i32, HandleState)>,
 }
 
@@ -109,7 +112,7 @@ impl Strategy for Reenter {
 
 #[test]
 fn reentrant_calls_are_rejected() {
-    let slot: Rc<RefCell<Option<Box<dyn Fn() -> (i32, i32, HandleState)>>>> = Rc::default();
+    let slot: ReenterCall = Rc::default();
     let strategy = Reenter {
         call: slot.clone(),
         observed: Vec::new(),
