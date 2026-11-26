@@ -1,0 +1,14 @@
+[package]
+name = "event-kernel-capi"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+publish = false
+description = "Deterministic Event Kernel の C ABI 公開層（EK-IF-001 IF-001）"
+
+[lib]
+name = "ek_capi"
+crate-type = ["rlib", "cdylib", "staticlib"]
+
+[dependencies]
+event-kernel-core = { path = "../core" }

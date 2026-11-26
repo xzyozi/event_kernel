@@ -1,6 +1,5 @@
-# Rust の品質ゲート（EK-ENV-001 4.4節）。QG-001〜QG-006 を実行する。
-# QG-007、QG-012、QG-013 は core-capi と bindings/python を追加する PR で追加する。
-# QG-008、QG-009 は定期実行で別に置く。
+# Rust の品質ゲート（EK-ENV-001 4.4節）。QG-001〜QG-007、QG-012、QG-013 を実行する。
+# QG-008（Bench）および QG-009（Miri）は定期実行ワークフローで別に置く。
 name: Rust CI
 on:
   push:
@@ -23,6 +22,10 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+      - name: Set up Python (for PyO3 build and attr script)
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
       - name: Install toolchain from rust-toolchain.toml
         run: rustup toolchain install
       - name: Show toolchain
@@ -33,8 +36,9 @@ jobs:
         run: cargo clippy --workspace --all-targets --locked -- -D warnings
       - name: QG-003 core crate attributes
         run: python3 .github/scripts/check_core_attrs.py
+
   test:
-    name: Rust Test (QG-004, QG-005) on ${{ matrix.os }}
+    name: Rust Test (QG-004, QG-005, QG-006) on ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 20
     strategy:
@@ -44,7 +48,49 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+      - name: Set up Python (for PyO3 build)
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
       - name: Install toolchain from rust-toolchain.toml
         run: rustup toolchain install
       - name: QG-004, QG-005, and QG-006 Rust tests
         run: cargo test --workspace --locked
+
+  ffi-gates:
+    name: FFI Contract, Header & Wheel (QG-007, QG-012, QG-013)
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      - name: Install toolchain from rust-toolchain.toml
+        run: rustup toolchain install
+      - name: Install cbindgen
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cbindgen@0.29.4
+      - name: QG-012 C header diff and C syntax check
+        shell: bash
+        run: |
+          cbindgen --config core-capi/cbindgen.toml --crate event-kernel-capi --output /tmp/event_kernel.h
+          diff -u core-capi/include/event_kernel.h /tmp/event_kernel.h
+          printf '#include "core-capi/include/event_kernel.h"\nint main(void){return 0;}\n' | cc -I. -x c -fsyntax-only -Wall -Wextra -Werror -
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Sync FFI test dependencies
+        run: uv sync --extra dev --extra ffi --locked
+      - name: Build C ABI shared library and Python wheel (QG-012)
+        run: |
+          cargo build -p event-kernel-capi --locked
+          uv run --no-sync maturin build --manifest-path bindings/python/Cargo.toml --locked --out dist
+          uv run --no-sync maturin develop --manifest-path bindings/python/Cargo.toml --locked
+          uv run --no-sync python -c "import event_kernel as ek; print(ek.__all__)"
+      - name: Run FFI parity, Arrow PyCapsule, panic recovery, and ViewGuard tests (QG-007, QG-013)
+        run: uv run --no-sync pytest bindings/python/tests -v
