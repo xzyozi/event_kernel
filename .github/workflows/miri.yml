@@ -1,0 +1,29 @@
+# Miri 未定義動作検査ワークフロー（QG-009、EK-ENV-001 4.4節）。
+name: Rust Miri (QG-009)
+on:
+  schedule:
+    - cron: '0 3 * * 1'
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: ci-miri-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+env:
+  CARGO_TERM_COLOR: always
+jobs:
+  miri:
+    name: Miri UB Check (QG-009)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      - name: Install nightly toolchain with miri
+        run: |
+          rustup toolchain install nightly --component miri
+          rustup +nightly component add rust-src
+      - name: Run Miri on core tests
+        run: cargo +nightly miri test --locked -p event-kernel-core --test view_guard --test snapshot_restore --test ordering
+      - name: Run Miri on C ABI contract tests
+        run: cargo +nightly miri test --locked -p event-kernel-capi --test capi_contract

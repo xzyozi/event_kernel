@@ -27,6 +27,7 @@ mod snapshot;
 pub mod status;
 mod trace;
 mod util;
+pub mod view;
 
 pub use config::{KernelConfig, MAX_STREAMS};
 pub use event::{
@@ -49,3 +50,4 @@ pub use trace::{
     TRACE_FLAG_HASH_PRESENT, TRACE_FORMAT_MAJOR, TRACE_FORMAT_MINOR, TRACE_HASH_ALGORITHM_XXH3_64,
     TRACE_MAGIC, TraceHeader, TraceRecord,
 };
+pub use view::{ViewGuard, ViewLease, ViewToken};

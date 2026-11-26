@@ -410,6 +410,17 @@ where
             .map_or(HandleState::Running, |inner| inner.state)
     }
 
+    /// 境界層でパニックを捕捉した場合などに、ハンドルを `Poisoned` 状態へ遷移させる（ADR-003 5.1-9）。
+    ///
+    /// コールバック実行中（再入状態）に呼ばれた場合は `ERR_REENTRANT` を返し状態を変更しない。
+    pub fn poison(&self) -> i32 {
+        let Ok(mut inner) = self.inner.try_borrow_mut() else {
+            return ERR_REENTRANT;
+        };
+        inner.state = HandleState::Poisoned;
+        OK
+    }
+
     /// 先頭フィード、約定ポート、戦略を読み取る。ステップの実行中は `ERR_REENTRANT`。
     pub fn inspect<R>(&self, read: impl FnOnce(&F, &E, &S) -> R) -> Result<R, i32> {
         let inner = self.inner.try_borrow().map_err(|_| ERR_REENTRANT)?;
