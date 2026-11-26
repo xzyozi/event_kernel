@@ -368,10 +368,8 @@ where
         }
         self.processed_event_count += 1;
         // 手順8: 先頭の補充と検証。
-        if from_feed {
-            if let Err(failure) = self.refill(header) {
-                return self.poison(failure);
-            }
+        if from_feed && let Err(failure) = self.refill(header) {
+            return self.poison(failure);
         }
         // 手順9（トレースとハッシュ）は、縦切りの範囲外。
         // 手順10。
