@@ -26,6 +26,30 @@
 | テスト計画・結果 | [EK-TEST-001_テスト計画・結果報告書.md](docs/test/EK-TEST-001_テスト計画・結果報告書.md) | 検証計画・`v0.0.1` 検証実績・未実施スパイク |
 | 実装計画・実測記録 | [コア縦切り実装計画.md](docs/analysis/コア縦切り実装計画.md) | `core/` 段階的実装の判断経緯とベンチマーク記録 |
 
+## Rust から利用する（サブモジュール等）
+
+利用側の `Cargo.toml` に `core/` への path 依存を追加します（crate は公開していません）。コード中のライブラリ名は `ek_core` です。Rust 1.97 以上が必要です。
+
+```toml
+[dependencies]
+event-kernel-core = { path = "external/event_kernel/core" }
+```
+
+`core/` は、入出力を trait（ポート）で受け取ります。既製のフィード実装・約定実装は提供していないため、利用側で次を実装して `Kernel::create(config, feed, exec, strategy)` に渡します（詳細は [EK-DD-001](docs/design/EK-DD-001_カーネルコア詳細設計書.md) 2.7 節、2.8 節と `core/src/ports.rs`）。
+
+| trait | 利用側の実装 | 必須メソッド | 既定実装があるメソッド |
+| :--- | :--- | :--- | :--- |
+| `EventFeedPort` | 必須 | `peek_next_timestamp`, `pop_next` | `position`, `validate_position`, `seek`（既定は位置を戻せないフィード） |
+| `ExecutionPort` | 必須 | `on_arrival`, `on_market_event`, `poll_result` | `capture_state`, `validate_state`, `restore_state`（既定は状態なし） |
+| `Strategy` | 必須 | `on_event` | なし |
+| `TraceSink` | 任意 | `write_header`, `write` | `is_present`。登録しない場合は `Kernel::create` を使う（内部で `NoTraceSink`）。登録する場合は `Kernel::create_with_trace` |
+| `SnapshotPort` | 任意 | `store` | なし。`Kernel::capture` を呼ぶときだけ渡す |
+
+- 複数フィードを使う場合は `Kernel::create_multi` を使います。
+- スナップショットの保存（`Kernel::capture`）と復元（`Kernel::restore`）を使う場合は、`EventFeedPort` の `position` が `seekable: true` を返し、`seek` と `validate_position` も実装してください。位置を戻せないフィードがあると、保存は `ERR_SNAPSHOT_UNSUPPORTED` で失敗します。`ExecutionPort` の内部状態を持つ場合は `capture_state` / `validate_state` / `restore_state` も実装します。
+- 実装例は `core/tests/common/mod.rs`（`VecFeed`、`FillNextExec`、`RecordingStrategy`）と `core/benches/step_throughput.rs` を参照してください。いずれもテスト・計測用で、公開 API ではありません。
+- Python の `InMemoryMarketFeed` / `SimExecution` は `bindings/python` 内の型で、`core/` からは使えません。
+
 ## ローカル検証コマンド
 
 環境ごとの前提や詳細手順は [EK-SETUP-001](docs/setup/EK-SETUP-001_環境構築手順書.md) を参照してください。
