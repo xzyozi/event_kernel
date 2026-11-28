@@ -2,7 +2,7 @@
 
 決定論的リプレイと先読みバイアス（Look-ahead Bias）の構造的排除を両立させる、イベント駆動カーネル基盤です。
 
-- **リリース**: `v0.0.1`（`main`：`core/` 実装・検証済み、`develop`：`core-capi/`・`adapters/`・`bindings/python/` 実装および全品質ゲート整備完了）
+- **リリース**: `v0.1.0`（`core/`・`core-capi/`・`adapters/`・`bindings/python/` 実装および全品質ゲート検証完了、`v0.0.1` は初期 `core/` 縦切り版）
 - **言語構成**: Rust コア（`core/`、`#![no_std]` + `#![forbid(unsafe_code)]` + 初期化時のみ `alloc`）、C ABI（`core-capi/`）、外部ポートアダプタ（`adapters/`）、Python ホスト連携（`bindings/python/`、PyO3 + Arrow PyCapsule）
 
 ## リポジトリ構成
@@ -66,11 +66,11 @@ event-kernel-adapters = { path = "external/event_kernel/adapters" }
 
 ## Python から利用する（サブモジュール等）
 
-PyPI や事前配布 wheel は公開していないため、サブモジュールとして追加して利用側環境で都度ビルドします（`bindings/python/` は `develop` ブランチに配置されています）。
+PyPI や事前配布 wheel は公開していないため、サブモジュールとして追加して利用側環境で都度ビルドします（`bindings/python/` は `v0.1.0` 以降の `main` および `develop` ブランチに配置されています）。
 
 ### 1. 前提環境
 
-- **ブランチ**: `develop`（`main` は `v0.0.1` のため `bindings/python/` を含みません）
+- **ブランチ**: `main`（`v0.1.0` 以降）または `develop`（最新開発版）
 - **Rust**: `rustup` / `cargo`（`rust-toolchain.toml` 指定の `1.97.1` が自動選択されます）
 - **Python / `uv`**: Python 3.10 以上（`requires-python = ">=3.10"`）、`uv`
 - **C ツールチェーン**: Windows は MSVC Build Tools、Linux は `cc` / `gcc`、macOS は Xcode Command Line Tools
@@ -79,7 +79,7 @@ PyPI や事前配布 wheel は公開していないため、サブモジュー�
 ### 2. 追加とインストール
 
 ```bash
-git submodule add -b develop https://github.com/xzyozi/event_kernel external/event_kernel
+git submodule add -b main https://github.com/xzyozi/event_kernel external/event_kernel
 uv venv
 uv pip install ./external/event_kernel/bindings/python
 ```
