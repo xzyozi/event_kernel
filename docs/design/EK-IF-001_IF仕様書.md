@@ -54,7 +54,7 @@ related_documents:
 - **DDとの関係**: 内部のモジュール間 DTO、ハンドル状態遷移条件、イベント処理手順、エラーコード値（`0`〜`3`、`-1`〜`-14`、`-99`）は [EK-DD-001](./EK-DD-001_カーネルコア詳細設計書.md) を正本とする。本書は DD の内部機能を外部境界（`core-capi` / `bindings/python`）へ露出する契約を定義する。
 - **DSとの関係**: `EventHeader`（32バイト、8バイト境界）のバイト配置と永続化スキーマは EK-DS-001 を正本とする。本書で定義する C ABI 型 `EkEventHeader` は DS の配置に厳密に従う。また、保存用スナップショット（`.eksnap`）の形式と出力結果（Arrow 出力）の形式を混同しない。
 - **BDとの関係**: ヘキサゴナルアーキテクチャ、信頼境界、パニック捕捉・ビュー無効化の横断方針は EK-BD-001 を正本とし、本書はそれを C ABI / Python API の具体契約へ落とし込む。
-- **ADR-003 との関係**: ADR-003 は「Proposed」であり、スパイク V-01〜V-06 の実測結果によっては本書の一部（バッチ単位の既定値や `abi3` 採否等）を改訂する。
+- **ADR-003 との関係**: ADR-003 は「Accepted」として確定済みであり、スパイク V-01〜V-06 の検証結果に基づきバッチコールバック既定値・Arrow PyCapsule・ViewGuard・Python アダプタ契約を確定している。
 - **矛盾時の扱い**: 更新日ではなく、該当する `ssot_scope` の正本を更新し、関連文書を追従させる。
 
 ### 1.3 BD・DS・DD からの引き継ぎ事項の整理
@@ -75,9 +75,9 @@ related_documents:
 
 | IF-ID  | インターフェース名                   | 方向   | 方式                                 | 相手先                          | 対応する DD 機能ID         | 状態 |
 | :----- | :----------------------------------- | :----- | :----------------------------------- | :------------------------------ | :------------------------- | :--- |
-| IF-001 | `core-capi` C ABI インターフェース   | 双方向 | C ABI（`extern "C"` + `cbindgen`）   | 外部 C/C++ ホスト、ネイティブ層 | F-001〜F-012               | 計画 |
-| IF-002 | `bindings/python` Python 拡張 API    | 双方向 | PyO3 拡張モジュール（`maturin`）     | Python ホスト・Python 戦略      | F-001〜F-012               | 計画 |
-| IF-003 | Arrow ゼロコピー結果出力インターフェース | 提供   | Arrow PyCapsule（`__arrow_c_stream__` 等） | Polars / PyArrow / NumPy        | F-002、F-003 の結果蓄積    | 計画 |
+| IF-001 | `core-capi` C ABI インターフェース   | 双方向 | C ABI（`extern "C"` + `cbindgen`）   | 外部 C/C++ ホスト、ネイティブ層 | F-001〜F-012               | 実装・検証済み |
+| IF-002 | `bindings/python` Python 拡張 API    | 双方向 | PyO3 拡張モジュール（`maturin`）     | Python ホスト・Python 戦略      | F-001〜F-012               | 実装・検証済み |
+| IF-003 | Arrow ゼロコピー結果出力インターフェース | 提供   | Arrow PyCapsule（`__arrow_c_stream__` 等） | Polars / PyArrow / NumPy        | F-002、F-003 の結果蓄積    | 実装・検証済み |
 
 ```mermaid
 flowchart LR
@@ -259,6 +259,8 @@ flowchart LR
 | `Kernel.state_digest()` | なし                                                               | `bytes`（32バイト SHA-256） | 保存を伴わず正準バイト列の SHA-256 を返す（非 seekable フィード時も可）   |
 | `Kernel.export_fills()` / `export_equity()` / `export_transitions()` | なし | Arrow Stream オブジェクト（`__arrow_c_stream__` 実装） | Polars / PyArrow へゼロコピー受け渡し（IF-003）                              |
 | `Kernel.close()`     | なし（コンテキストマネージャ `__enter__` / `__exit__` 対応）         | `None`           | 明示的破棄。`Running` 中は `ReentrantError`                                  |
+| `DiskSnapshotPort(dir, run_id)` | `dir: str`, `run_id: str`（英数字と `-` のみ、`store`/`load`/`snapshot_path`/`cleaned_tmp_files`） | `DiskSnapshotPort` | `adapters` の原子スナップショット永続化ストア。不正 `run_id` は `ValueError`、衝突・I/O 失敗は `SnapshotIoError`、読込形式異常は `SnapshotRestoreError` |
+| `DiskTraceSink(dir, run_id)` | `dir: str`, `run_id: str`（英数字と `-` のみ、`path`/`write_header`/`write`/`sync`） | `DiskTraceSink` | `<dir>/<run_id>.ektrace` へ追記するネイティブトレースシンク。`Kernel(..., trace_sink=...)` へ渡した際は Python 境界往復を伴わないネイティブ直結経路で記録する。不正 `run_id` は `ValueError`、不正長・形式異常・I/O 失敗は `PortFailureError` |
 
 #### 4.2.2 コールバックコンテキストと `ViewGuard` 寿命契約（ADR-003 5.1-7）
 
@@ -420,3 +422,4 @@ sequenceDiagram
 | Rev.0.1 | 2026-11-26 | xzyozi | 初版ドラフト。BD 4.2節、DS 4.2節、ADR-003（層分離案C）を引き継ぎ、`core-capi` C ABI、`bindings/python` PyO3 API、Arrow PyCapsule 出力とハッシュ契約を定義。 |
 | Rev.0.2 | 2026-11-27 | xzyozi | `EK-DD-001`・`EK-TEST-001` との相互リンクを追加し、`F-011`/`F-012`、`max_total_bytes`、`StepResult.detail`、`ERR_SNAPSHOT_IO`、`payload_record_size >= 16`、`TC-ID` 対応を同期した。 |
 | Rev.0.3 | 2026-11-27 | xzyozi | 実装済み `core/` と整合させ、`capture(SnapshotPort)` 引数・`EkAction.payload_len <= payload_record_size - 8`・`ERR_SNAPSHOT_IO (-14)`（C ABI）・`EkFeedVTable`/`EkExecVTable`/`EkSnapVTable`/`EkTraceVTable`・`EkPrng`・Python `KernelConfig.max_total_bytes`/`init_strategy_arena`/`read_strategy_arena`/`trace_sink`・V-01/IF-003 責務境界を反映した。 |
+| Rev.1.0 | 2026-11-28 | xzyozi | ADR-003 の Accepted 確定、IF-001〜IF-003 の実装・検証済み反映、`DiskSnapshotPort` / `DiskTraceSink` Python 公開 API 追記、および `version: "1.0"`・`status: "approved"` を確定した。 |

@@ -762,4 +762,19 @@ def test_tc016_python_disk_snapshot_and_trace_adapters(tmp_path: Path) -> None:
     assert kernel.run().status == ek.StepStatus.FINISHED
     assert kernel.state_digest() == expected_digest
 
+    # 不正 run_id は DiskSnapshotPort / DiskTraceSink ともに ValueError を送出すること
+    with pytest.raises(ValueError):
+        ek.DiskSnapshotPort(str(snap_dir), "bad_id")
+    with pytest.raises(ValueError):
+        ek.DiskTraceSink(str(trace_dir), "bad_id")
+
+    # DiskTraceSink.write_header / write は余剰・不足バイト列を拒否すること
+    direct_sink = ek.DiskTraceSink(str(trace_dir), "direct-len-check")
+    with pytest.raises(ek.PortFailureError):
+        direct_sink.write_header(b"\x00" * 33)
+    with pytest.raises(ek.PortFailureError):
+        direct_sink.write(b"\x00" * 41)
+    with pytest.raises(ek.PortFailureError):
+        direct_sink.write(b"\x00" * 16)
+
 

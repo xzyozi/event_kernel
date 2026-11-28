@@ -1091,39 +1091,53 @@ impl ExecutionPort for PyExecPortAdapter {
     }
 }
 
+enum PyTraceKind {
+    None,
+    NativeDisk(Rc<RefCell<DiskTraceSink>>),
+    PythonObj(Py<PyAny>),
+}
+
 struct PyTraceSinkAdapter {
-    obj: Option<Py<PyAny>>,
+    kind: PyTraceKind,
 }
 
 impl TraceSink for PyTraceSinkAdapter {
     fn is_present(&self) -> bool {
-        self.obj.is_some()
+        !matches!(self.kind, PyTraceKind::None)
     }
 
     fn write_header(&mut self, header: &TraceHeader) -> Result<(), PortError> {
-        let Some(obj) = &self.obj else {
-            return Err(PortError(ERR_PORT_FAILURE));
-        };
-        Python::attach(|py| {
-            obj.call_method1(
-                py,
-                "write_header",
-                (PyBytes::new(py, &header.to_le_bytes()),),
-            )
-            .map(|_| ())
-            .map_err(|_| PortError(ERR_PORT_FAILURE))
-        })
+        match &self.kind {
+            PyTraceKind::None => Err(PortError(ERR_PORT_FAILURE)),
+            PyTraceKind::NativeDisk(inner) => inner
+                .try_borrow_mut()
+                .map_err(|_| PortError(ERR_REENTRANT))?
+                .write_header(header),
+            PyTraceKind::PythonObj(obj) => Python::attach(|py| {
+                obj.call_method1(
+                    py,
+                    "write_header",
+                    (PyBytes::new(py, &header.to_le_bytes()),),
+                )
+                .map(|_| ())
+                .map_err(|_| PortError(ERR_PORT_FAILURE))
+            }),
+        }
     }
 
     fn write(&mut self, record: &TraceRecord) -> Result<(), PortError> {
-        let Some(obj) = &self.obj else {
-            return Err(PortError(ERR_PORT_FAILURE));
-        };
-        Python::attach(|py| {
-            obj.call_method1(py, "write", (PyBytes::new(py, &record.to_le_bytes()),))
-                .map(|_| ())
-                .map_err(|_| PortError(ERR_PORT_FAILURE))
-        })
+        match &self.kind {
+            PyTraceKind::None => Err(PortError(ERR_PORT_FAILURE)),
+            PyTraceKind::NativeDisk(inner) => inner
+                .try_borrow_mut()
+                .map_err(|_| PortError(ERR_REENTRANT))?
+                .write(record),
+            PyTraceKind::PythonObj(obj) => Python::attach(|py| {
+                obj.call_method1(py, "write", (PyBytes::new(py, &record.to_le_bytes()),))
+                    .map(|_| ())
+                    .map_err(|_| PortError(ERR_PORT_FAILURE))
+            }),
+        }
     }
 }
 
@@ -1206,7 +1220,8 @@ impl PyDiskSnapshotPort {
 /// `adapters/` 追記専用トレースシンクの Python ラッパ。
 #[pyclass(name = "DiskTraceSink", module = "event_kernel._core", unsendable)]
 pub struct PyDiskTraceSink {
-    inner: DiskTraceSink,
+    inner: Rc<RefCell<DiskTraceSink>>,
+    path: String,
 }
 
 #[pymethods]
@@ -1215,31 +1230,47 @@ impl PyDiskTraceSink {
     fn new(py: Python<'_>, dir: &str, run_id: &str) -> PyResult<Self> {
         let sink =
             DiskTraceSink::create(dir, run_id).map_err(|rc| map_error_code(py, rc, 0, None))?;
-        Ok(Self { inner: sink })
+        let path = sink.path().to_string_lossy().into_owned();
+        Ok(Self {
+            inner: Rc::new(RefCell::new(sink)),
+            path,
+        })
     }
 
-    fn path(&self) -> String {
-        self.inner.path().to_string_lossy().into_owned()
+    fn path(&self) -> &str {
+        &self.path
     }
 
-    fn write_header(&mut self, py: Python<'_>, header_bytes: &[u8]) -> PyResult<()> {
+    fn write_header(&self, py: Python<'_>, header_bytes: &[u8]) -> PyResult<()> {
+        if header_bytes.len() != TraceHeader::SIZE {
+            return Err(map_error_code(py, ERR_PORT_FAILURE, 0, None));
+        }
         let hdr = TraceHeader::from_le_bytes_validated(header_bytes)
             .ok_or_else(|| map_error_code(py, ERR_PORT_FAILURE, 0, None))?;
         self.inner
+            .try_borrow_mut()
+            .map_err(|_| map_error_code(py, ERR_REENTRANT, 0, None))?
             .write_header(&hdr)
             .map_err(|e| map_error_code(py, e.0, 0, None))
     }
 
-    fn write(&mut self, py: Python<'_>, record_bytes: &[u8]) -> PyResult<()> {
+    fn write(&self, py: Python<'_>, record_bytes: &[u8]) -> PyResult<()> {
+        if record_bytes.len() != TraceRecord::SIZE {
+            return Err(map_error_code(py, ERR_PORT_FAILURE, 0, None));
+        }
         let rec = TraceRecord::from_le_bytes(record_bytes)
             .ok_or_else(|| map_error_code(py, ERR_PORT_FAILURE, 0, None))?;
         self.inner
+            .try_borrow_mut()
+            .map_err(|_| map_error_code(py, ERR_REENTRANT, 0, None))?
             .write(&rec)
             .map_err(|e| map_error_code(py, e.0, 0, None))
     }
 
-    fn sync(&mut self, py: Python<'_>) -> PyResult<()> {
+    fn sync(&self, py: Python<'_>) -> PyResult<()> {
         self.inner
+            .try_borrow_mut()
+            .map_err(|_| map_error_code(py, ERR_REENTRANT, 0, None))?
             .sync()
             .map_err(|rc| map_error_code(py, rc, 0, None))
     }
@@ -1477,7 +1508,17 @@ impl PyKernel {
             leaked_buffer: Rc::clone(&leaked_buffer),
             tables: Rc::clone(&tables),
         };
-        let trace_adapter = PyTraceSinkAdapter { obj: trace_sink };
+        let trace_kind = match trace_sink {
+            None => PyTraceKind::None,
+            Some(obj) => {
+                if let Ok(native) = obj.bind(py).extract::<PyRef<'_, PyDiskTraceSink>>() {
+                    PyTraceKind::NativeDisk(Rc::clone(&native.inner))
+                } else {
+                    PyTraceKind::PythonObj(obj)
+                }
+            }
+        };
+        let trace_adapter = PyTraceSinkAdapter { kind: trace_kind };
         let kernel = Kernel::create_multi_with_trace(
             config.inner,
             feed_adapters,

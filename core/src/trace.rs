@@ -183,7 +183,11 @@ impl TraceRecord {
         let rec = bytes.get(..Self::SIZE)?;
         let reserved: [u8; 6] = rec.get(34..40)?.try_into().ok()?;
         let trace_flags = u16::from_le_bytes(rec.get(32..34)?.try_into().ok()?);
-        if reserved != [0u8; 6] || (trace_flags & !TRACE_FLAG_HASH_PRESENT) != 0 {
+        let state_hash = u64::from_le_bytes(rec.get(24..32)?.try_into().ok()?);
+        if reserved != [0u8; 6]
+            || (trace_flags & !TRACE_FLAG_HASH_PRESENT) != 0
+            || ((trace_flags & TRACE_FLAG_HASH_PRESENT) == 0 && state_hash != 0)
+        {
             return None;
         }
         Some(Self {
@@ -192,7 +196,7 @@ impl TraceRecord {
             stream_id: u32::from_le_bytes(rec.get(16..20)?.try_into().ok()?),
             event_type: u16::from_le_bytes(rec.get(20..22)?.try_into().ok()?),
             event_flags: u16::from_le_bytes(rec.get(22..24)?.try_into().ok()?),
-            state_hash: u64::from_le_bytes(rec.get(24..32)?.try_into().ok()?),
+            state_hash,
             trace_flags,
             reserved,
         })

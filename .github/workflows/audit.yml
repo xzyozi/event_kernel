@@ -19,6 +19,7 @@ on:
     branches: [ main, develop ]
     paths:
       - 'Cargo.lock'
+      - '.cargo/audit.toml'
       - '.github/workflows/audit.yml'
 permissions:
   contents: read

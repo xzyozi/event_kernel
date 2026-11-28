@@ -77,6 +77,9 @@ uv run --no-sync pytest bindings/python/tests -v
 uv run --no-sync python .github/scripts/validate_docs.py docs README.md
 ```
 
+> [!NOTE]
+> macOS 等の複数 Python が共存する環境で `.venv` を有効化せずに素の `cargo test --workspace --locked` を実行すると、システム付属の古い Python（例: Python 3.9）へリンクしようとして `bindings/python` のビルドが失敗する場合があります。その場合は `uv run --no-sync cargo test --workspace --locked` または `PYO3_PYTHON="$(pwd)/.venv/bin/python3" cargo test --workspace --locked` を使用してください。
+
 ## 4. 構築後の確認
 
 品質ゲートの正式な定義と合格基準は [EK-ENV-001 4.4節](./EK-ENV-001_環境・開発基盤仕様書.md) を正本とする。ここではローカル環境構築直後に確認する項目のみを記載する。
