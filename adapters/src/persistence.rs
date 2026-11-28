@@ -6,8 +6,8 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use ek_core::{
-    ERR_PORT_FAILURE, ERR_SNAPSHOT_INVALID, ERR_SNAPSHOT_IO, PortError, SnapshotPort, TraceHeader,
-    TraceRecord, TraceSink, validate_snapshot_format,
+    ERR_INVALID_ARGUMENT, ERR_PORT_FAILURE, ERR_SNAPSHOT_INVALID, ERR_SNAPSHOT_IO, PortError,
+    SnapshotPort, TraceHeader, TraceRecord, TraceSink, validate_snapshot_format,
 };
 
 /// `run_id` の制約（EK-DS-001 1.3節: 非空かつ英数字と `-` のみ、`_` 禁止）を検証する。
@@ -17,7 +17,7 @@ pub fn validate_run_id(run_id: &str) -> Result<(), i32> {
             .bytes()
             .all(|b| b.is_ascii_alphanumeric() || b == b'-')
     {
-        return Err(ERR_SNAPSHOT_IO);
+        return Err(ERR_INVALID_ARGUMENT);
     }
     Ok(())
 }
@@ -231,9 +231,9 @@ impl SnapshotPort for DiskSnapshotStore {
             let _ = fs::remove_file(&tmp_path);
             return Err(PortError(ERR_SNAPSHOT_IO));
         }
-        if fs::remove_file(&tmp_path).is_err() {
-            return Err(PortError(ERR_SNAPSHOT_IO));
-        }
+        // hard_link 成功時点で最終スナップショットは公開済みのため、一時ファイル削除失敗では Err にしない
+        // （次回起動時の `.tmp` 清掃で回収される）。
+        let _ = fs::remove_file(&tmp_path);
 
         // 手順4: ディレクトリ同期。
         self.sync_parent_dir().map_err(PortError)?;

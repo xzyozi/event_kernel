@@ -90,26 +90,37 @@ impl ExecutionPort for SimExecutionAdapter {
     }
 
     fn capture_state(&self, out: &mut [u8]) -> Result<usize, PortError> {
-        let mut encoded = Vec::with_capacity(64);
-        encoded.extend_from_slice(&EXEC_STATE_MAGIC);
-        encoded.extend_from_slice(&(self.pending.len() as u32).to_le_bytes());
-        encoded.extend_from_slice(&self.delay_ns.to_le_bytes());
-        encoded.extend_from_slice(&self.default_price.to_le_bytes());
-        encoded.extend_from_slice(&self.default_qty.to_le_bytes());
-        for (hdr, pl) in &self.pending {
-            encoded.extend_from_slice(&hdr.timestamp_ns.to_le_bytes());
-            encoded.extend_from_slice(&hdr.sequence_id.to_le_bytes());
-            encoded.extend_from_slice(&hdr.stream_id.to_le_bytes());
-            encoded.extend_from_slice(&hdr.event_type.to_le_bytes());
-            encoded.extend_from_slice(&hdr.flags.to_le_bytes());
-            encoded.extend_from_slice(&(pl.len() as u32).to_le_bytes());
-            encoded.extend_from_slice(pl);
+        let count = u32::try_from(self.pending.len()).map_err(|_| PortError(ERR_PORT_FAILURE))?;
+        let mut needed = 32usize;
+        for (_, pl) in &self.pending {
+            let _ = u32::try_from(pl.len()).map_err(|_| PortError(ERR_PORT_FAILURE))?;
+            needed = needed
+                .checked_add(28)
+                .and_then(|v| v.checked_add(pl.len()))
+                .ok_or(PortError(ERR_PORT_FAILURE))?;
         }
-        if encoded.len() > out.len() {
+        if needed > out.len() {
             return Err(PortError(ERR_PORT_FAILURE));
         }
-        out[..encoded.len()].copy_from_slice(&encoded);
-        Ok(encoded.len())
+        out[0..4].copy_from_slice(&EXEC_STATE_MAGIC);
+        out[4..8].copy_from_slice(&count.to_le_bytes());
+        out[8..16].copy_from_slice(&self.delay_ns.to_le_bytes());
+        out[16..24].copy_from_slice(&self.default_price.to_le_bytes());
+        out[24..32].copy_from_slice(&self.default_qty.to_le_bytes());
+        let mut pos = 32usize;
+        for (hdr, pl) in &self.pending {
+            let pl_len = u32::try_from(pl.len()).map_err(|_| PortError(ERR_PORT_FAILURE))?;
+            out[pos..pos + 8].copy_from_slice(&hdr.timestamp_ns.to_le_bytes());
+            out[pos + 8..pos + 16].copy_from_slice(&hdr.sequence_id.to_le_bytes());
+            out[pos + 16..pos + 20].copy_from_slice(&hdr.stream_id.to_le_bytes());
+            out[pos + 20..pos + 22].copy_from_slice(&hdr.event_type.to_le_bytes());
+            out[pos + 22..pos + 24].copy_from_slice(&hdr.flags.to_le_bytes());
+            out[pos + 24..pos + 28].copy_from_slice(&pl_len.to_le_bytes());
+            pos += 28;
+            out[pos..pos + pl.len()].copy_from_slice(pl);
+            pos += pl.len();
+        }
+        Ok(pos)
     }
 
     fn validate_state(&self, state: &[u8]) -> Result<(), PortError> {
@@ -153,10 +164,16 @@ fn decode_exec_state(state: &[u8]) -> Result<DecodedExecState, PortError> {
             .map_err(|_| PortError(ERR_PORT_FAILURE))?,
     );
 
+    let min_body_bytes = count.checked_mul(28).ok_or(PortError(ERR_PORT_FAILURE))?;
+    if min_body_bytes > state.len() - 32 {
+        return Err(PortError(ERR_PORT_FAILURE));
+    }
+
     let mut pos = 32usize;
     let mut pending = VecDeque::with_capacity(count);
     for _ in 0..count {
-        if pos + 28 > state.len() {
+        let entry_end = pos.checked_add(28).ok_or(PortError(ERR_PORT_FAILURE))?;
+        if entry_end > state.len() {
             return Err(PortError(ERR_PORT_FAILURE));
         }
         let timestamp_ns = i64::from_le_bytes(
@@ -189,12 +206,13 @@ fn decode_exec_state(state: &[u8]) -> Result<DecodedExecState, PortError> {
                 .try_into()
                 .map_err(|_| PortError(ERR_PORT_FAILURE))?,
         ) as usize;
-        pos += 28;
-        if pos + pl_len > state.len() {
+        pos = entry_end;
+        let pl_end = pos.checked_add(pl_len).ok_or(PortError(ERR_PORT_FAILURE))?;
+        if pl_end > state.len() {
             return Err(PortError(ERR_PORT_FAILURE));
         }
-        let payload = state[pos..pos + pl_len].to_vec();
-        pos += pl_len;
+        let payload = state[pos..pl_end].to_vec();
+        pos = pl_end;
         pending.push_back((
             EventHeader {
                 timestamp_ns,

@@ -4,6 +4,8 @@
 //! - `execution`: 決定論シミュレーション約定アダプタ（状態シリアライズ/復元対応）
 //! - `persistence`: スナップショット原子書き込み・復旧検証（DS 3.1 / 4.3節）およびトレースログ読み書き
 
+#![forbid(unsafe_code)]
+
 pub mod execution;
 pub mod feed;
 pub mod persistence;

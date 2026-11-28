@@ -72,11 +72,13 @@ impl EventFeedPort for SeekableCursorFeed {
             .records
             .get(self.pos)
             .ok_or(PortError(ERR_PORT_FAILURE))?;
+        if rec.payload.len() > payload.len() {
+            return Err(PortError(ERR_PORT_FAILURE));
+        }
         self.pos += 1;
         *header = rec.header;
         payload.fill(0);
-        let n = payload.len().min(rec.payload.len());
-        payload[..n].copy_from_slice(&rec.payload[..n]);
+        payload[..rec.payload.len()].copy_from_slice(&rec.payload);
         Ok(())
     }
 
@@ -116,16 +118,20 @@ impl CsvFeed {
         Self::from_str_csv(&text)
     }
 
-    /// CSV 文字列から解析する。1行目がヘッダ行なら自動スキップする。
+    /// CSV 文字列から解析する。最初の有効行（空行と `#` コメントを除く先頭行）がヘッダ行ならスキップする。
     pub fn from_str_csv(text: &str) -> Result<Self, i32> {
         let mut records = Vec::new();
-        for (line_idx, raw_line) in text.lines().enumerate() {
+        let mut saw_first_content_line = false;
+        for raw_line in text.lines() {
             let line = raw_line.trim();
             if line.is_empty() || line.starts_with('#') {
                 continue;
             }
-            if line_idx == 0 && line.starts_with("timestamp_ns") {
-                continue;
+            if !saw_first_content_line {
+                saw_first_content_line = true;
+                if line.starts_with("timestamp_ns") {
+                    continue;
+                }
             }
             let cols: Vec<&str> = line.split(',').map(str::trim).collect();
             if cols.len() < 5 {
@@ -186,17 +192,24 @@ pub struct BinarySoaFeed(SeekableCursorFeed);
 
 impl BinarySoaFeed {
     /// バイナリイベントファイルを書き出す（`EKEV` + count(u64) + stride(u32) + 各レコード）。
+    /// バイナリ形式でファイルへ書き出す。`payload_stride` は全レコードの `payload` 長以上であること。
     pub fn write_file(
         path: impl AsRef<Path>,
         records: &[EventInputRecord],
         payload_stride: usize,
     ) -> Result<(), i32> {
+        let stride_u32 = u32::try_from(payload_stride).map_err(|_| ERR_PORT_FAILURE)?;
+        for rec in records {
+            if rec.payload.len() > payload_stride {
+                return Err(ERR_PORT_FAILURE);
+            }
+        }
         let mut file = File::create(path).map_err(|_| ERR_PORT_FAILURE)?;
         file.write_all(&BINARY_FEED_MAGIC)
             .map_err(|_| ERR_PORT_FAILURE)?;
         file.write_all(&(records.len() as u64).to_le_bytes())
             .map_err(|_| ERR_PORT_FAILURE)?;
-        file.write_all(&(payload_stride as u32).to_le_bytes())
+        file.write_all(&stride_u32.to_le_bytes())
             .map_err(|_| ERR_PORT_FAILURE)?;
         let mut buf = vec![0u8; payload_stride];
         for rec in records {
@@ -213,8 +226,7 @@ impl BinarySoaFeed {
             file.write_all(&0u64.to_le_bytes())
                 .map_err(|_| ERR_PORT_FAILURE)?;
             buf.fill(0);
-            let n = buf.len().min(rec.payload.len());
-            buf[..n].copy_from_slice(&rec.payload[..n]);
+            buf[..rec.payload.len()].copy_from_slice(&rec.payload);
             file.write_all(&buf).map_err(|_| ERR_PORT_FAILURE)?;
         }
         file.sync_all().map_err(|_| ERR_PORT_FAILURE)?;
@@ -288,13 +300,22 @@ impl EventFeedPort for BinarySoaFeed {
 const PARQUET_EVENT_SCHEMA: &str = "
 message event_kernel_input {
   REQUIRED INT64 timestamp_ns;
-  REQUIRED INT64 sequence_id;
-  REQUIRED INT32 stream_id;
+  REQUIRED INT64 sequence_id (INTEGER(64,false));
+  REQUIRED INT32 stream_id (INTEGER(32,false));
   REQUIRED INT32 event_type;
   REQUIRED INT32 flags;
   REQUIRED BYTE_ARRAY payload;
 }
 ";
+
+const PARQUET_EXPECTED_COLUMNS: [&str; 6] = [
+    "timestamp_ns",
+    "sequence_id",
+    "stream_id",
+    "event_type",
+    "flags",
+    "payload",
+];
 
 /// Apache Parquet イベントファイルを書き出す（`ParquetFeed` と同一スキーマ）。
 pub fn write_parquet_events(
@@ -373,14 +394,43 @@ impl ParquetFeed {
     pub fn from_path(path: impl AsRef<Path>) -> Result<Self, i32> {
         let file = File::open(path).map_err(|_| ERR_PORT_FAILURE)?;
         let reader = SerializedFileReader::new(file).map_err(|_| ERR_PORT_FAILURE)?;
+        let schema_descr = reader.metadata().file_metadata().schema_descr();
+        if schema_descr.num_columns() != PARQUET_EXPECTED_COLUMNS.len() {
+            return Err(ERR_PORT_FAILURE);
+        }
+        for (col, expected_name) in schema_descr
+            .columns()
+            .iter()
+            .zip(PARQUET_EXPECTED_COLUMNS.iter())
+        {
+            if col.name() != *expected_name {
+                return Err(ERR_PORT_FAILURE);
+            }
+        }
         let mut records = Vec::new();
         let row_iter = reader.get_row_iter(None).map_err(|_| ERR_PORT_FAILURE)?;
         for row_res in row_iter {
             let row = row_res.map_err(|_| ERR_PORT_FAILURE)?;
             let timestamp_ns = row.get_long(0).map_err(|_| ERR_PORT_FAILURE)?;
-            let sequence_id = u64::try_from(row.get_long(1).map_err(|_| ERR_PORT_FAILURE)?)
+            let sequence_id = row
+                .get_ulong(1)
+                .or_else(|_| {
+                    row.get_long(1).and_then(|v| {
+                        u64::try_from(v).map_err(|_| {
+                            parquet::errors::ParquetError::General("negative sequence_id".into())
+                        })
+                    })
+                })
                 .map_err(|_| ERR_PORT_FAILURE)?;
-            let stream_id = u32::try_from(row.get_int(2).map_err(|_| ERR_PORT_FAILURE)?)
+            let stream_id = row
+                .get_uint(2)
+                .or_else(|_| {
+                    row.get_int(2).and_then(|v| {
+                        u32::try_from(v).map_err(|_| {
+                            parquet::errors::ParquetError::General("negative stream_id".into())
+                        })
+                    })
+                })
                 .map_err(|_| ERR_PORT_FAILURE)?;
             let event_type = u16::try_from(row.get_int(3).map_err(|_| ERR_PORT_FAILURE)?)
                 .map_err(|_| ERR_PORT_FAILURE)?;
