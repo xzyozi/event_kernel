@@ -43,10 +43,11 @@ event-kernel-adapters = { path = "external/event_kernel/adapters" }
 ### 提供方針（`core/` は trait のみ、既製実装は `adapters/`）
 
 - **`core/` (`ek_core`, `#![no_std]`)**: 既製のフィード・約定実装は持たず、入出力は trait（ポート）のみで受け取ります。最小の `no_std` / `#![forbid(unsafe_code)]` 境界を保つための方針です（詳細は [EK-DD-001](docs/design/EK-DD-001_カーネルコア詳細設計書.md) 2.7 節、2.8 節と `core/src/ports.rs`）。
-- **`adapters/` (`ek_adapters`, `std` / `#![forbid(unsafe_code)]`)**: 「呼び出しだけ」で利用できる既製実装を提供します。`Strategy` だけを自前で実装し、以下の既製型と組み合わせて `Kernel::create` / `create_multi` / `create_with_trace` へ渡せます。
+- **`adapters/` (`ek_adapters`, `std` / `#![forbid(unsafe_code)]`)**: 「呼び出しだけ」で利用できる既製実装を提供します。`Strategy` だけを自前で実装し、以下の既製型と組み合わせて `Kernel::create` / `create_multi` / `create_with_trace` / `create_multi_with_trace` へ渡せます。
   - **フィード（`EventFeedPort`）**: `VecFeedAdapter`（インメモリ、既定で `seekable: true`）、`CsvFeed`、`BinarySoaFeed`、`ParquetFeed`
   - **約定（`ExecutionPort`）**: `SimExecutionAdapter`（決定論遅延・状態保存/復元対応）
   - **永続化（`SnapshotPort` / `TraceSink`）**: `MemorySnapshotStore`、`DiskSnapshotStore`（原子書き込み）、`DiskTraceSink`、`TraceLogReader`
+  - **注意（`NFR-02`・依存関係）**: `SimExecutionAdapter` は汎用 `std` 実装であり `on_arrival` 内で `Vec` / `VecDeque` を確保するため、ホットパス動的確保ゼロ（`NFR-02`）が必須の用途では `core/` のポート trait を自前で実装してください。また現行の `adapters/Cargo.toml` は `parquet` を必須依存に含みます。
 
 ### `core/` のポート実装範囲（自前実装する場合）
 
@@ -55,10 +56,10 @@ event-kernel-adapters = { path = "external/event_kernel/adapters" }
 | `EventFeedPort` | 必須（または `ek_adapters` 利用） | `peek_next_timestamp`, `pop_next` | `position`, `validate_position`, `seek`（既定は位置を戻せないフィード） |
 | `ExecutionPort` | 必須（または `ek_adapters` 利用） | `on_arrival`, `on_market_event`, `poll_result` | `capture_state`, `validate_state`, `restore_state`（既定は状態なし） |
 | `Strategy` | 必須 | `on_event` | なし |
-| `TraceSink` | 任意（または `DiskTraceSink` 利用） | `write_header`, `write` | `is_present`。登録しない場合は `Kernel::create` を使う（内部で `NoTraceSink`）。登録する場合は `Kernel::create_with_trace` |
+| `TraceSink` | 任意（または `DiskTraceSink` 利用） | `write_header`, `write` | `is_present`。登録しない場合は `Kernel::create` / `create_multi`（内部で `NoTraceSink`）、登録する場合は `Kernel::create_with_trace` / `create_multi_with_trace` |
 | `SnapshotPort` | 任意（または `MemorySnapshotStore` / `DiskSnapshotStore` 利用） | `store` | なし。`Kernel::capture` を呼ぶときだけ渡す |
 
-- 複数フィードを使う場合は `Kernel::create_multi` を使います。
+- 複数フィードを使う場合は `Kernel::create_multi` または `Kernel::create_multi_with_trace` を使います。
 - スナップショットの保存（`Kernel::capture`）と復元（`Kernel::restore`）を使う場合は、`EventFeedPort` の `position` が `seekable: true` を返し、`seek` と `validate_position` も実装してください。位置を戻せないフィードがあると、保存は `ERR_SNAPSHOT_UNSUPPORTED` で失敗します。`ExecutionPort` の内部状態を持つ場合は `capture_state` / `validate_state` / `restore_state` も実装します。
 - `core/` 単体での実装例は `core/tests/common/mod.rs`（`VecFeed`、`FillNextExec`、`RecordingStrategy`）と `core/benches/step_throughput.rs`（いずれもテスト・計測用で非公開 API）、`ek_adapters` の利用例は `adapters/tests/adapters_contract.rs` を参照してください。
 - Python の `InMemoryMarketFeed` / `SimExecution` は `bindings/python` 内のラッパ型であり、Rust からは代わりに `ek_adapters` の `VecFeedAdapter` / `SimExecutionAdapter` を利用します。
