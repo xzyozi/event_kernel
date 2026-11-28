@@ -4,10 +4,10 @@ document_type: "environment_setup_procedure"
 document_number: "EK-SETUP-001"
 document_role: "procedure"
 ssot_scope: "environment_setup"
-status: "draft"
-version: "0.2"
+status: "approved"
+version: "1.0"
 created_at: "2026-11-26"
-updated_at: "2026-11-27"
+updated_at: "2026-11-28"
 author: "xzyozi"
 owner: "xzyozi"
 purpose: "EK-ENV-001環境・開発基盤仕様書に沿って、Deterministic Event KernelのRust・Python・FFIビルドツールチェーンおよび文書検証環境を準備・確認・更新する手順を定義するため"
@@ -57,18 +57,23 @@ Python 側の共通手順は [python_setup.md](./python_setup.md) を正本と�
 | No. | 操作・設定 | 期待結果 | 異常時の対応 |
 | :--- | :--- | :--- | :--- |
 | 1 | **リポジトリ取得とブランチ確認**: `develop` ブランチを基準に作業ブランチを作成する | 作業ツリーがクリーンで、`pyproject.toml` と `.python-version` が存在する | ブランチや未コミット変更を整理してから再開する |
-| 2 | **Python 環境構築（`uv`）**: `python_setup.md` に従い `uv sync --extra dev` を実行する | `.venv` が作成され、`ruff` / `mypy` / `pytest` が利用可能になる | `uv` 未導入時は公式手順で導入する。Python 3.12 が取得できない場合は `uv python install 3.12` を確認する |
-| 3 | **Rust ツールチェーン導入（`rustup`）**: `rustup` で Rust `1.85` 以上（導入後は `rust-toolchain.toml` 指定版）および `rustfmt` / `clippy` コンポーネントを導入する | `rustc --version` が `1.85.0` 以上を示し、`cargo fmt` / `cargo clippy` が起動できる | 導入できない場合は `EK-ENV-001` 6章 `EX-001` に従い CI 上で検証する |
-| 4 | **FFI ビルド補助ツール導入**: `cargo install cbindgen`（C ヘッダ生成用）および `uv` 開発環境へ `maturin`（`bindings/python` ビルド用）を導入する | `cbindgen --version` と `uv run maturin --version` が終了コード `0` でバージョンを返す | ビルドエラー時は C コンパイラ（MSVC / gcc）のパス設定を確認する |
-| 5 | **Miri 環境導入（`V-05` / `QG-009` 検証時のみ）**: `rustup toolchain install nightly --component miri` を実行する | `cargo +nightly miri --version` が応答する | nightly 特有のエラー時は `EK-ENV-001` 4.4節に従い定期 CI での実行に切り替える |
+| 2 | **Python 環境構築（`uv`）**: `python_setup.md` に従い `uv sync --extra dev --extra ffi --locked` を実行する（FFI 不要の軽量検証のみなら `--extra dev`） | `.venv` が作成され、`ruff` / `mypy` / `pytest` / `maturin` / `pyarrow` / `polars` が利用可能になる | `uv` 未導入時は公式手順で導入する。Python 3.12 が取得できない場合は `uv python install 3.12` を確認する |
+| 3 | **Rust ツールチェーン導入（`rustup`）**: `rustup` で Rust `1.97.1`（`rust-toolchain.toml` 指定版）および `rustfmt` / `clippy` コンポーネントを導入する | `rustc --version` が `1.97.1` を示し、`cargo fmt` / `cargo clippy` が起動できる | 導入できない場合は `EK-ENV-001` 6章 `EX-001` に従い CI 上で検証する |
+| 4 | **FFI・アダプタビルド検証**: `cargo install cbindgen --locked` 導入後、C ヘッダ差分確認、C ABI 共有ライブラリビルド、`maturin build` / `develop`、FFI 契約 pytest を実行する | ヘッダ差分ゼロ（`cc` 構文検査合格）、`dist/*.whl` 生成・インポート成功、FFI/アダプタテスト全合格 | ビルドエラー時は C コンパイラ（MSVC / `cc`）および `target/debug` 上の `ek_capi` 共有ライブラリ有無を確認する |
+| 5 | **Miri / ベンチ / 脆弱性検査（必要時）**: `rustup toolchain install nightly --component miri rust-src`、`cargo bench`、`cargo audit` を実行する | Miri（UB 0件）、`step_throughput` ベンチ（`NFR-03: met`）、`cargo audit` が正常終了する | 実行できない環境では GitHub Actions（`miri.yml` / `bench.yml` / `audit.yml`）で確認する |
 | 6 | **文書検証準備**: Python 標準ライブラリで `validate_docs.py` を確認し、必要に応じ Node.js で `validateMermaidMarkdown.mjs` を確認する | `python3 .github/scripts/validate_docs.py docs README.md` がエラー 0 で終了する | エラー出力のファイル・行番号に従い Frontmatter またはリンクを修正する |
 
 ```bash
 # 手順 2〜6 の主要確認コマンド例（Rust ツールチェーン導入後）
-uv sync --extra dev
-rustc --version
-cargo clippy --version
-cbindgen --version
+uv sync --extra dev --extra ffi --locked
+cargo fmt --all --check && cargo clippy --workspace --all-targets --locked -- -D warnings
+cargo test --workspace --locked
+cargo build -p event-kernel-capi --locked
+cbindgen --config core-capi/cbindgen.toml --crate event-kernel-capi --output /tmp/event_kernel.h
+diff -u core-capi/include/event_kernel.h /tmp/event_kernel.h
+uv run --no-sync maturin build --manifest-path bindings/python/Cargo.toml --locked --out dist
+uv run --no-sync maturin develop --manifest-path bindings/python/Cargo.toml --locked
+uv run --no-sync pytest bindings/python/tests -v
 uv run --no-sync python .github/scripts/validate_docs.py docs README.md
 ```
 
@@ -81,13 +86,14 @@ uv run --no-sync python .github/scripts/validate_docs.py docs README.md
 | Python 基盤（`QG-010`） | `uv run --no-sync ruff check .`、`ruff format --check .`、`mypy .`、`pytest` | すべてエラー 0 で終了 | ターミナル実行ログ |
 | 文書検証（`QG-011`） | `python3 .github/scripts/validate_docs.py docs README.md` | エラー 0 で終了 | ターミナル実行ログ |
 | Rust ツールチェーン（`QG-001`〜`QG-006`） | `rustc --version`、`cargo fmt --all --check`、`cargo clippy --workspace --all-targets --locked -- -D warnings`、`python3 .github/scripts/check_core_attrs.py`、`cargo test --workspace --locked` | Rust `1.97.1`（`rust-toolchain.toml`）かつ各検査・全テスト合格 | ターミナル実行ログ |
-| FFI ツール（`QG-012` 準備） | `cbindgen --version`、`maturin --version` | 両コマンドが終了コード `0` | ターミナル実行ログ |
+| FFI 成果物・寿命検証（`QG-007`・`QG-012`・`QG-013`） | `cbindgen` ヘッダ差分確認、`cargo build -p event-kernel-capi --locked`、`maturin develop --locked`、`uv run --no-sync pytest bindings/python/tests -v` | ヘッダ差分ゼロ、wheel 生成・インポート成功、FFI/アダプタ全テスト合格 | ターミナル実行ログ |
+| 定期・セキュリティ補助（`QG-008`・`QG-009`・`audit`） | `cargo bench --locked -p event-kernel-core --bench step_throughput`、`cargo +nightly miri test --locked ...`、`cargo audit --deny warnings` | UB 0件、アドバイザリ違反 0件、ベンチ完走 | ターミナル実行ログ / CI |
 
 ## 5. 更新・再構築・削除（必要な場合のみ）
 
-- **更新**: `uv.lock` 更新時は `uv sync --extra dev` を再実行する。`rust-toolchain.toml` 更新時は `rustup show` で自動同期されたツールチェーン版数を確認する。
-- **再構築**: 仮想環境の破損時は `.venv` を再同期（`uv sync --extra dev --reinstall`）する。Rust ビルドキャッシュ不整合時は `cargo clean` 後に `--locked` 付きで再ビルドする。
-- **削除・撤去**: 環境の破棄はリポジトリ配下の `.venv` および `target/` の削除で完結する（グローバル設定へプロジェクト固有の状態を残さない）。
+- **更新**: `uv.lock` 更新時は `uv sync --extra dev --extra ffi --locked` を再実行する。`rust-toolchain.toml` 更新時は `rustup show` で自動同期されたツールチェーン版数を確認する。
+- **再構築**: 仮想環境の破損時は `.venv` を再同期（`uv sync --extra dev --extra ffi --reinstall`）する。Rust ビルドキャッシュ不整合時は `cargo clean` 後に `--locked` 付きで再ビルドする。
+- **削除・撤去**: 環境の破棄はリポジトリ配下の `.venv`・`dist/`・`target/`・`*.egg-info/` の削除で完結する（旧テンプレート由来の `my_awesome_project.egg-info/` 等が残存している場合も、`git status` 対象外であることを確認した上で削除できる）。
 - **ロールバック**: `uv.lock` や `rust-toolchain.toml` に不整合が生じた場合は、`git checkout` で直前のコミット状態へ戻して再同期する。
 
 ## 6. トラブル・例外（必要な場合のみ）
@@ -97,7 +103,7 @@ uv run --no-sync python .github/scripts/validate_docs.py docs README.md
 | ID | 対象手順 | 症状・差異 | 原因・制約 | 対応 | 再発防止・解除条件 |
 | :--- | :--- | :--- | :--- | :--- | :--- |
 | EX-001 | 手順 3〜5 | 一部のローカル開発機に Rust ツールチェーンが未導入 | `EK-ENV-001` 6章 `EX-001` の運用方針による | 未導入機では文書・Python 検証を行い、Rust ゲートは導入済み計算機または CI（`ci-rust.yml`）で実行する | 開発機への `rustup` / `rust-toolchain.toml` 導入完了時に解除 |
-| EX-002 | 手順 4 | 【解除済み（`core/` 分）】`Cargo.toml` / `ci-rust.yml`（`QG-001`〜`QG-006`）は導入済み。FFI 境界ゲート（`QG-007`, `QG-012`, `QG-013`）のみ未追加 | `core-capi/`・`bindings/python/` が未作成 | FFI 境界層を追加する PR で `QG-007`/`QG-012`/`QG-013` を `ci-rust.yml` へ追加する | 境界層 PR マージ完了時に完全解除 |
+| EX-002 | 手順 4〜5 | 【解除済み】4クレート（`core/`・`core-capi/`・`adapters/`・`bindings/python/`）および全 CI ゲート（`ci-rust.yml`・`bench.yml`・`miri.yml`・`audit.yml`）を整備完了 | なし | 標準手順に沿ってローカル・CI 双方で全検証を実行する | 解除済み |
 
 ## 7. 関連文書
 
@@ -122,3 +128,4 @@ uv run --no-sync python .github/scripts/validate_docs.py docs README.md
 | :------ | :--------- | :----- | :--------------------------------------------------------------------------------------------- |
 | Rev.0.1 | 2026-11-26 | xzyozi | 初版ドラフト。EK-ENV-001 8章の未作成項目に対応し、Rust・FFI・Python・文書検証の構築手順を整備。 |
 | Rev.0.2 | 2026-11-27 | xzyozi | `Cargo.toml` / `Cargo.lock` / `rust-toolchain.toml` / `ci-rust.yml`（`QG-001`〜`QG-006`）整備済み状態および `EK-DD-001` / `EK-IF-001` / `EK-TEST-001` 参照へ同期。 |
+| Rev.1.0 | 2026-11-28 | xzyozi | `--extra ffi` / `cbindgen` / `maturin` / FFIテスト / Miri / ベンチ / `cargo audit` 手順を追記し、`EX-002` 完全解除および `status` を `approved` へ更新（Issue #20）。 |

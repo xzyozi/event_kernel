@@ -4,8 +4,8 @@ document_type: "environment_specification"
 document_number: "EK-ENV-001"
 document_role: "normative"
 ssot_scope: "environment"
-status: "draft"
-version: "0.6"
+status: "approved"
+version: "1.0"
 created_at: "2026-11-24"
 updated_at: "2026-11-28"
 author: "xzyozi"
@@ -38,7 +38,7 @@ related_documents:
 ## 2. ハード要件・制約
 
 - **必須プラットフォーム**: Windows と Linux。決定論性は両OSで検証する（AC-07）。
-- **性能の基準機**: NFR-03 の基準機は未確定（要件定義書 OPEN-06）。確定するまで、AC-06 は参考値として記録し、合否の判定に使わない。
+- **性能の基準機**: `OPEN-06` は確定済み。主基準実機として Apple M3（macOS 14.3 / ARM64 / 16 GB RAM）、x86_64 回帰確認環境として GitHub Actions `ubuntu-latest`（`bench.yml` / `QG-008`）を用い、`AC-06`（NFR-03）の合否を判定する。
 - **ネットワーク・アクセス**: 依存パッケージの取得に外部レジストリを使う。実行時のネットワーク通信は不要。
 - **Rust の最低バージョン**: PyO3 0.30.0 の MSRV は Rust 1.85（ADR-003 5.2節による）。これ以上のバージョンに固定する。具体的なバージョンは 4.1節で定める。
 - **Python の対応範囲**: 3.10 以上（`pyproject.toml` の `requires-python`）。開発用は 3.12（`.python-version`）。
@@ -47,10 +47,11 @@ related_documents:
 
 | 環境            | 用途                                                | プラットフォーム / 実行方式                                                                            | 所有者 | 更新・廃止方針                                                             |
 | :-------------- | :-------------------------------------------------- | :----------------------------------------------------------------------------------------------------- | :----- | :------------------------------------------------------------------------- |
-| ローカル開発    | 実装、単体テスト、設計書の作成                      | Windows（開発機）                                                                                      | 開発者 | ツールチェーンは `rust-toolchain.toml` と `uv.lock` に従う。               |
-| 計算機（Linux） | 実測（ベンチマーク）と、Rust のビルド、テストの反復 | 社内の Linux 計算機（KVM 仮想機、RHEL 8 系、Intel Core i5-1235U の2 vCPU）。Rust は、システムの 1.97.1 | xzyozi | 参考の基準機（OPEN-06）。仕様は docs/analysis/コア縦切り実装計画.md を参照 |
-| CI（Linux）     | 全品質ゲートの実行                                  | GitHub Actions（`ubuntu-latest`）                                                                      | xzyozi | ワークフローの更新はPRで行う。                                             |
-| CI（Windows）   | AC-07（OS間のハッシュ一致）、Windows でのビルド確認 | GitHub Actions（`windows-latest`）                                                                     | xzyozi | 同上。                                                                     |
+| ローカル開発    | 実装、単体テスト、設計書の作成                      | Windows / macOS（開発・検証機）                                                                        | 開発者 | ツールチェーンは `rust-toolchain.toml` と `uv.lock` に従う。               |
+| 基準実機（macOS） | `OPEN-06` 主基準実機（`NFR-03` 計測・検証）       | Apple M3（ARM64、物理8コア / 論理8コア、16 GB RAM、macOS 14.3 Build 23D2057）、Rust 1.97.1 (`rustup`) | xzyozi | 正式基準機（`OPEN-06`）。計測実績は `EK-TEST-001` 3章・`RUN-005` に記録  |
+| 計算機（Linux） | x86_64 実測・ビルド検証補助                         | 社内の Linux 計算機（KVM 仮想機、RHEL 8 系、Intel Core i5-1235U の2 vCPU）。Rust は、システムの 1.97.1 | xzyozi | 補助検証機。仕様は `docs/analysis/コア縦切り実装計画.md` を参照            |
+| CI（Linux）     | 全品質ゲート・`QG-008` x86_64 回帰ベンチ実行        | GitHub Actions（`ubuntu-latest`、x86_64）                                                              | xzyozi | ワークフローの更新はPRで行う。                                             |
+| CI（Windows）   | AC-07（OS間のハッシュ一致）、Windows でのビルド・FFI確認 | GitHub Actions（`windows-latest`、x86_64）                                                             | xzyozi | 同上。                                                                     |
 
 ## 4. 適用する環境要素
 
@@ -153,7 +154,7 @@ related_documents:
 | 脆弱性検査ツール        | 【解決済み】`cargo audit` を `.github/workflows/audit.yml` へ導入済み（4.6節）                                                                          | 導入済み                         |
 | QG-003 の検査スクリプト | 【解決済み】`.github/scripts/check_core_attrs.py` として作成済み（4.4節）                                                                               | `core/` を作る PR（完了）        |
 | `core/clippy.toml`      | 【解決済み】作成し、`core/src/lib.rs` の `#![deny(...)]` と併せて運用中（4.4節の注）                                                                    | `core/` を作る PR（完了）        |
-| 性能の基準機            | OPEN-06（2章）                                                                                                                                          | テスト計画の作成・基準機確定時   |
+| 性能の基準機            | 【解決済み】`OPEN-06` 確定（主基準実機: Apple M3 / macOS 14.3、x86_64 CI 回帰: `ubuntu-latest`）（2章、3章） | 確定済み（Issue #19）            |
 | `ci-rust.yml` / `miri.yml` / `bench.yml` | 【解決済み】`ci-rust.yml`（Ubuntu/Windows FFI含む）、`miri.yml`（QG-009）、`bench.yml`（QG-008）、`audit.yml` をすべて整備済み | 整備完了 |
 
 ## 7. 関連文書
@@ -186,3 +187,4 @@ related_documents:
 | Rev.0.4 | 2026-11-27 | xzyozi | 社内の Linux 計算機追記を反映した環境基盤調整。                                                                                                                                                                                                                                                                                                                                                                                           |
 | Rev.0.5 | 2026-11-27 | xzyozi | ADR-003 承認に伴い `abi3` 採否（非 `abi3` 標準 wheel）を確定。`ci-rust.yml` への `QG-007`/`QG-012`/`QG-013` 追加および `miri.yml`（`QG-009`）追加を反映し、`EX-002`・6.1節を更新。 |
 | Rev.0.6 | 2026-11-28 | xzyozi | `bench.yml`（`QG-008`）・`audit.yml`（`cargo audit`）追加および `ci-rust.yml` `ffi-gates` の Ubuntu/Windows マトリクス拡張を反映し、`EX-002`・6.1節を解除済みに更新（Issue #18）。 |
+| Rev.1.0 | 2026-11-28 | xzyozi | `OPEN-06`（Apple M3 主基準実機 + `ubuntu-latest` x86_64 CI 回帰確認）確定に伴い 2章・3章・6.1節を更新し、`status` を `approved` へ更新（Issue #19 / #20）。 |

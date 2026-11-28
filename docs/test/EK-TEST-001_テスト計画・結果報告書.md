@@ -4,8 +4,8 @@ document_type: "test_plan_report"
 document_number: "EK-TEST-001"
 document_role: "evidence"
 ssot_scope: "test_evidence"
-status: "draft"
-version: "0.4"
+status: "approved"
+version: "1.0"
 created_at: "2026-11-26"
 updated_at: "2026-11-28"
 author: "xzyozi"
@@ -89,17 +89,19 @@ related_documents:
   - CI（Windows）: GitHub Actions `windows-latest`（OS 間 SHA-256 一致検証 `AC-07`）
   - 定期 / スパイク環境: Rust `nightly` + Miri（`QG-009`）
 - **性能基準機記録欄（要件定義書 `OPEN-06`）**:
-  - 確定状態: **未確定**（ベンチマーク実施環境を確定した時点で、CPU 型番・コア数・動作クロック・メモリ容量・OS/カーネル版数・Rust ツールチェーン版数を本欄へ記録する）。
+  - 確定状態: **確定済み（`OPEN-06` 解決）**
+  - 主基準実機: **Apple M3**（`arm64`、物理 8 コア / 論理 8 コア、メモリ 16 GB、macOS 14.3 Build `23D2057`、`rustc 1.97.1` / `cargo 1.97.1`、`--release` LTO、単一スレッド実行）。実測（1,000万市場イベント×5回中央値）: `2-stream+trace+xxh3(10k)` **53,974,888 events/s**、`trace+xxh3(10k)` **50,578,800 events/s**、`baseline` **38,299,786 events/s**。
+  - `x86_64` 回帰確認環境: **GitHub Actions `ubuntu-latest`**（`bench.yml` / `QG-008`、PR #25 実測中央値）: `2-stream+trace+xxh3(10k)` **52,693,705 events/s**、`trace+xxh3(10k)` **54,231,005 events/s**、`baseline` **56,123,704 events/s**。
 - **テストデータ**:
   - 決定論的合成フィード（単調増加、同一時刻マルチストリーム、時刻逆行、連番違反、シーク不可フィード、`SnapshotTrigger` / `EndOfStream` フラグ付きデータ）。
   - 標準ベンチマークデータ（要件定義書 8章: 2ストリーム計 1,000万イベント、32バイトヘッダ + 64バイトペイロードのインメモリ SoA 構成）。機密情報・実顧客データは使用しない。
 - **前提条件**:
-  - Rust Cargo ワークスペースの全4層（`core/`・`core-capi/`・`adapters/`・`bindings/python/`）と品質ゲート群（`ci-rust.yml`、`bench.yml`、`miri.yml`、`audit.yml`、`ci-python.yml`、`validate-docs.yml`、`validate-mermaid.yml`）は整備済み。残余の正式判定対象は `OPEN-06` 基準機確定後の `TC-017`（`EX-003`）のみである。
+  - Rust Cargo ワークスペースの全4層（`core/`・`core-capi/`・`adapters/`・`bindings/python/`）、品質ゲート群（`ci-rust.yml`、`bench.yml`、`miri.yml`、`audit.yml`、`ci-python.yml`、`validate-docs.yml`、`validate-mermaid.yml`）、および `OPEN-06` 基準機がすべて整備・確定済みである。
 - **実行方法**: `EK-ENV-001` 4.4節（`QG-001`〜`QG-014`）および [EK-SETUP-001](../setup/EK-SETUP-001_環境構築手順書.md) に従う。
 
 ## 4. テストケース
 
-設計書・要件定義書・ADR-003 との追跡性を確保するため、期待結果の根拠に `AC-xxx` / `TR-xxx` / `TR-IF-xxx` / `V-xx` / `DS` 節番号を記載する。`RUN-004` 時点で `core/` の 56 件、`core-capi/` の 2 件、`adapters/` の 3 件、`bindings/python/` の FFI/アダプタ契約テスト 7 件、および Miri 15 件（`TC-024`）がすべて Pass 済みである（未実施は `OPEN-06` 確定後の `TC-017` 正式合否判定のみ）。
+設計書・要件定義書・ADR-003 との追跡性を確保するため、期待結果の根拠に `AC-xxx` / `TR-xxx` / `TR-IF-xxx` / `V-xx` / `DS` 節番号を記載する。`RUN-005` 時点で `core/` 56 件、`core-capi/` 2 件、`adapters/` 3 件、`bindings/python/` 7 件、Miri 15 件（`TC-024`）、および `TC-017`（`NFR-03`）を含め **全テスト項目が Pass 済み** である。
 
 | ケースID | 対象・条件                                  | 入力・操作                                                                             | 期待結果                                                                                                   | 期待結果の根拠            | 実績結果 | 判定   | 証跡 |
 | :------- | :------------------------------------------ | :------------------------------------------------------------------------------------- | :--------------------------------------------------------------------------------------------------------- | :------------------------ | :------- | :----- | :--- |
@@ -119,7 +121,7 @@ related_documents:
 | TC-014   | `run` 停止条件別の終了コード                | 終端到達、`max_events` 到達、`SnapshotTrigger` フラグ付きイベントで `run` を実行       | それぞれ `STEP_FINISHED`、`RUN_LIMIT_REACHED`、`RUN_SNAPSHOT_REQUESTED` を返す                             | TR-015                    | `failures.rs` で全合格 | Pass | `RUN-002` |
 | TC-015   | 単一実行・16並列実行・OS間決定論性          | 同一入力・シードで単一実行、16スレッド並列実行、Linux / Windows 各 CI で実行           | 正準バイト列 SHA-256、トレースログ SHA-256、Arrow 出力ハッシュ（境界実装後）が 100% 一致                   | AC-04, AC-07, NFR-01, TR-016, TR-IF-008 | `core/`（`determinism.rs`・`hash.rs`・`ubuntu`/`windows` CI）、FFI（Ubuntu/Windows `ffi-gates`）、Parquet/CSV/バイナリ再現一致がすべて Pass | Pass | `RUN-004` |
 | TC-016   | スナップショット・トレース形式検査・原子書き込み | 破損バイト列、非昇順セクション、`reserved != 0`、`run_id` 同名衝突、異常終了後の一時ファイル清掃 | 形式違反は読み込み拒否。同名衝突・清掃はアダプタ層実装後に検証                                             | DS 3.1節, DS 4.3節        | `core`（`snapshot_restore.rs`・`hash.rs`）＋`adapters`（`adapters_contract.rs` 原子書き込み/衝突拒否/`.tmp`スコープ清掃/破損読込拒否/トレース端数破棄）＋Python `test_tc016` 全合格 | Pass | `RUN-004` |
-| TC-017   | NFR-03 標準ベンチマーク（参考計測→判定）    | 要件定義書 8章の標準条件（2ストリーム 1,000万イベント, `--release` LTO, 単一物理コア）  | 毎秒 1,000万イベント以上（`OPEN-06` 基準機確定前は参考値記録、確定後に合否判定）                           | AC-06, NFR-03, QG-008     | 参考値: Apple M3 / 2-stream+trace+xxh3(10k) 中央値 **56,002,449 events/s**（`コア縦切り実装計画.md` 7.7節） | 判定保留（参考 Pass） | `コア縦切り実装計画.md` |
+| TC-017   | NFR-03 標準ベンチマーク（正式判定）         | 要件定義書 8章の標準条件（2ストリーム 1,000万イベント, `--release` LTO, Apple M3 主基準機 + `ubuntu-latest` CI） | 毎秒 1,000万イベント以上（`OPEN-06` 確定済み）                                                             | AC-06, NFR-03, QG-008     | Apple M3 (`rustc 1.97.1`): `2-stream+trace+xxh3(10k)` 中央値 **53,974,888 events/s** / `ubuntu-latest` CI: **52,693,705 events/s**（`met`） | Pass | `RUN-005` |
 | TC-018   | C ABI レイアウト・`cbindgen` ヘッダ一致     | `EkEventHeader` のサイズ/オフセット静的検査および `cbindgen` 出力とコミットヘッダ比較  | サイズ 32バイト、8バイト境界、全フィールドオフセットが DS と一致し、生成ヘッダ差分ゼロ                     | ADR-003 5.1-1, QG-012, TR-IF-001 | `core-capi` `const` 検査、`cbindgen` 差分ゼロ、C文法構文検査 (`cc -Wall -Wextra -Werror`)、`ctypes.sizeof(EkEventHeader) == 32` 全合格 | Pass | `RUN-003` |
 | TC-019   | C ABI 不正引数防御                          | NULL ポインタ、`struct_size` 不一致、`trace_enabled=2` を渡して C ABI 関数を呼び出す  | `ERR_INVALID_ARGUMENT` を返し、未定義動作・クラッシュを起こさない                                          | TR-IF-002                 | `capi_contract.rs` および `test_ffi_contract.py`（`ctypes`）で NULL・`struct_size`・flags 違反時の `-1` 返却を全合格 | Pass | `RUN-003` |
 | TC-020   | `V-01`: Python コールバック単位比較スパイク | イベント単位コールバックとバッチ単位コールバックで同一入力を実行しスループットを比較   | 処理時間・境界通過コストを実測記録し、バッチ単位の既定値根拠とする                                         | ADR-003 V-01              | `--release` LTO (N=200k): 単一 `0.1235s` (`1,619,662 ev/s`, `617.4 ns/ev`)、`batch=64` `0.0029s` (`69,286,073 ev/s`, `14.4 ns/ev`, 42.78x)、`batch=256` `0.0016s` (`124,831,007 ev/s`, `8.0 ns/ev`, 77.07x) | Pass | `RUN-003` |
@@ -137,10 +139,11 @@ related_documents:
 | RUN-001 | 2026-11-26 | xzyozi（設計段階） | `python3 .github/scripts/validate_docs.py` 等  | ドキュメント構造・整合性検証のみ実施。コード・Rust CI は未実装 | 本ファイル作成時点の計画登録のみ   |
 | RUN-002 | 2026-11-27 | xzyozi（macOS / GitHub Actions Ubuntu & Windows） | `cargo fmt --all --check`、`cargo clippy --workspace --all-targets --locked -- -D warnings`、`check_core_attrs.py`、`cargo test --workspace --locked`、PR #12 全14チェック | `core/` 統合テスト **53 件全合格**（0件失敗）、`QG-001`〜`QG-006` / `QG-010` / `QG-011` 全合格（`v0.0.1`） | GitHub Release tag `v0.0.1` / PR #12 / ローカル実行ログ |
 | RUN-003 | 2026-11-27 | xzyozi（macOS ARM64 / Ubuntu GitHub Actions） | `cargo test --workspace --locked`、`cbindgen` 差分/C構文、`maturin build/develop`、`pytest bindings/python/tests`、`ruff`/`mypy`、`cargo +nightly miri test` | `core/` 56件 + `core-capi/` 2件 + Python FFI 6件（`V-01`〜`V-06`）+ Miri 15件 **すべて合格（0失敗・UB 0件）**。`QG-007`/`009`/`012`/`013` 整備完了 | PR #16 / ローカル実行ログ |
-| RUN-004 | 2026-11-28 | xzyozi（macOS ARM64 / GitHub Actions Ubuntu & Windows） | PR #25 全12チェック（`audit.yml`/`bench.yml`/`miri.yml`/Windows FFI）、`cargo clippy`/`test --workspace --locked`（`adapters/` 追加後）、`pytest bindings/python/tests` | `core/` 56件 + `core-capi/` 2件 + `adapters/` 3件（`TC-016`・Parquet/CSV/Binary）+ Python 7件 **全合格（0失敗）**。`cargo audit`・リモート Miri・Windows FFI も合格 | PR #25 / `feat/adapters-17` |
+| RUN-004 | 2026-11-28 | xzyozi（macOS ARM64 / GitHub Actions Ubuntu & Windows） | PR #25 全12チェック（`audit.yml`/`bench.yml`/`miri.yml`/Windows FFI）、`cargo clippy`/`test --workspace --locked`（`adapters/` 追加後）、`pytest bindings/python/tests` | `core/` 56件 + `core-capi/` 2件 + `adapters/` 3件（`TC-016`・Parquet/CSV/Binary）+ Python 7件 **全合格（0失敗）**。`cargo audit`・リモート Miri・Windows FFI も合格 | PR #25 / PR #26 |
+| RUN-005 | 2026-11-28 | xzyozi（macOS ARM64 Apple M3 / Rust 1.97.1 & CI `ubuntu-latest`） | `cargo bench --locked -p event-kernel-core --bench step_throughput`、`bench.yml`（PR #25） | Apple M3 `2-stream+trace+xxh3(10k)` 中央値 **53,974,888 events/s**、CI x86_64 中央値 **52,693,705 events/s**（`OPEN-06` 確定・`TC-017` 正式 Pass） | 本ブランチ実行ログ / PR #25 |
 
-- **総合判定**: **`core/`・FFI 境界層・`adapters/` はすべて合格 / 残余は `OPEN-06` 正式基準機での `TC-017` 合否確定待ち**
-- **判定理由**: `RUN-004` で PR #25（Ubuntu/Windows FFI・`bench.yml`・`miri.yml`・`audit.yml`）および `adapters/` クレート（原子永続化・Parquet/CSV/バイナリ フィード・`TC-016`）が全合格した。未確定項目は `OPEN-06` 正式基準機での `AC-06` 判定（`TC-017` / `EX-003`）のみである。
+- **総合判定**: **合格（全テスト項目 Pass）**
+- **判定理由**: `core/`（56件）・`core-capi/`（2件）・`adapters/`（3件）・Python 契約テスト（7件）・Miri（15件）・GitHub Actions（Ubuntu/Windows CI・`bench.yml`・`miri.yml`・`audit.yml`）・および確定基準機（`OPEN-06`）上の `TC-017`（NFR-03 5倍以上）まですべて合格し、`EX-001`〜`EX-003` はすべて解除済みとなった。
 
 ## 6. 未実施・対象外・テスト差異
 
@@ -148,7 +151,7 @@ related_documents:
 | :----- | :--------------------------------- | :----- | :----------------------------------------------------------------------- | :--------------------------------------------------------- | :------------------------------------------------------------- | :--------------------- |
 | EX-001 | ワークスペース単体・結合テスト全般 | 解除済み | `core/` 56件、`core-capi/` 2件、`adapters/` 3件、Python 7件を整備・全合格 | 4層すべての契約・原子永続化・決定論性・寿命検査を検証済み | 継続的に `ci-rust.yml` / `ci-python.yml` で検証                | xzyozi / 完了（`RUN-004`） |
 | EX-002 | `V-01`〜`V-06` FFI スパイク        | 解除済み | `RUN-003` で `core-capi/`・`bindings/python/` を実装し `V-01`〜`V-06`・Miri を完了 | 境界性能・PyCapsule・SHA-256 一致・`Poisoned`・寿命検査の検証完了 | `ADR-003` を `accepted`、要件 `OPEN-02` を解決済みに更新済み | xzyozi / 完了（`RUN-003`） |
-| EX-003 | `AC-06` 性能ベンチマーク           | 参考計測済み（正式判定保留） | 正式基準機が未確定（要件定義書 `OPEN-06`） | 参考環境（Core i5-1235U Linux VM / Apple M3）では 1,000万 events/s を超過したが、正式環境での基準値が未確定 | `OPEN-06` 確定後に `QG-008` 標準ベンチマークで正式合否判定を実施 | xzyozi / 基準機確定時  |
+| EX-003 | `AC-06` 性能ベンチマーク           | 解除済み | `OPEN-06`（Apple M3 主基準実機 + `ubuntu-latest` x86_64 CI 回帰環境）を確定 | NFR-03（1,000万 events/s）に対し 5,200万〜5,400万 events/s を確認 | `bench.yml`（`QG-008`）により定期回帰計測を継続               | xzyozi / 完了（`RUN-005`） |
 
 ## 7. 関連文書
 
@@ -178,3 +181,4 @@ related_documents:
 | Rev.0.2 | 2026-11-27 | xzyozi | `EK-DD-001`・`EK-IF-001`・`EK-SETUP-001` リンク追加、および `v0.0.1` の `core/` 53件合格・CI・H1 参考値（`RUN-002`, `TC-001`〜`TC-017`, `TC-026`）を反映。 |
 | Rev.0.3 | 2026-11-27 | xzyozi | `core-capi/`・`bindings/python/` 実装および `V-01`〜`V-06` スパイク・Miri 検証結果（`RUN-003`, `TC-008`, `TC-018`〜`TC-025`, `EX-002` 解除）を反映。 |
 | Rev.0.4 | 2026-11-28 | xzyozi | PR #25（Ubuntu/Windows FFI・`bench.yml`・`miri.yml`・`audit.yml`）および `adapters/` クレート（原子永続化・Parquet/CSV/バイナリ フィード・`TC-016`・`EX-001` 解除・`RUN-004`）を反映（Issue #17/#18）。 |
+| Rev.0.5 | 2026-11-28 | xzyozi | `OPEN-06`（Apple M3 主基準実機 + `ubuntu-latest` x86_64 CI 回帰）確定、`TC-017` 正式 Pass、`EX-003` 解除、`RUN-005` 記録、および `status` を `approved` へ更新（Issue #19/#20）。 |
