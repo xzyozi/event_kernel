@@ -1,0 +1,8 @@
+# cargo-audit 設定（EK-ENV-001 4.6節）
+# cargo audit --deny warnings を維持しつつ、上流クレートが依存し脆弱性ではなく
+# 保守状態情報（unmaintained）のみの項目を理由・レビュー記録付きで明示的に管理する。
+[advisories]
+ignore = [
+    # parquet 60.2.0 が直接依存する chrono 0.4.45 の unmaintained 通知（CVE/脆弱性なし、PR #26 確認済み）
+    "RUSTSEC-2026-0543",
+]

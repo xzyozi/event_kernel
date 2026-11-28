@@ -14,6 +14,7 @@ use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::rc::Rc;
 
 use arrow::{ArrowColumn, ArrowColumnData, PyArrowResultStream};
+use ek_adapters::{DiskSnapshotStore, DiskTraceSink};
 use ek_core::{
     ACTION_PAYLOAD_OFFSET, Action, Context, ERR_CAPACITY_EXCEEDED, ERR_CAUSALITY_VIOLATION,
     ERR_INVALID_ARGUMENT, ERR_PANIC, ERR_POISONED, ERR_PORT_FAILURE, ERR_QUEUE_FULL, ERR_REENTRANT,
@@ -1150,6 +1151,100 @@ impl SnapshotPort for PySnapPortAdapter {
     }
 }
 
+/// `adapters/` 原子ディスク永続化スナップショットポートの Python ラッパ。
+#[pyclass(name = "DiskSnapshotPort", module = "event_kernel._core", unsendable)]
+pub struct PyDiskSnapshotPort {
+    inner: DiskSnapshotStore,
+}
+
+#[pymethods]
+impl PyDiskSnapshotPort {
+    #[new]
+    fn new(py: Python<'_>, dir: &str, run_id: &str) -> PyResult<Self> {
+        let store =
+            DiskSnapshotStore::open(dir, run_id).map_err(|rc| map_error_code(py, rc, 0, None))?;
+        Ok(Self { inner: store })
+    }
+
+    fn cleaned_tmp_files(&self) -> usize {
+        self.inner.cleaned_tmp_files()
+    }
+
+    fn snapshot_path(&self, logical_time_ns: i64, event_count: u64) -> String {
+        self.inner
+            .snapshot_path(logical_time_ns, event_count)
+            .to_string_lossy()
+            .into_owned()
+    }
+
+    fn store(
+        &mut self,
+        py: Python<'_>,
+        blob: &[u8],
+        logical_time_ns: i64,
+        event_count: u64,
+    ) -> PyResult<()> {
+        self.inner
+            .store(blob, logical_time_ns, event_count)
+            .map_err(|e| map_error_code(py, e.0, 0, None))
+    }
+
+    fn load<'py>(
+        &self,
+        py: Python<'py>,
+        logical_time_ns: i64,
+        event_count: u64,
+    ) -> PyResult<Bound<'py, PyBytes>> {
+        let bytes = self
+            .inner
+            .load(logical_time_ns, event_count)
+            .map_err(|rc| map_error_code(py, rc, 0, None))?;
+        Ok(PyBytes::new(py, &bytes))
+    }
+}
+
+/// `adapters/` 追記専用トレースシンクの Python ラッパ。
+#[pyclass(name = "DiskTraceSink", module = "event_kernel._core", unsendable)]
+pub struct PyDiskTraceSink {
+    inner: DiskTraceSink,
+}
+
+#[pymethods]
+impl PyDiskTraceSink {
+    #[new]
+    fn new(py: Python<'_>, dir: &str, run_id: &str) -> PyResult<Self> {
+        let sink =
+            DiskTraceSink::create(dir, run_id).map_err(|rc| map_error_code(py, rc, 0, None))?;
+        Ok(Self { inner: sink })
+    }
+
+    fn path(&self) -> String {
+        self.inner.path().to_string_lossy().into_owned()
+    }
+
+    fn write_header(&mut self, py: Python<'_>, header_bytes: &[u8]) -> PyResult<()> {
+        let hdr = TraceHeader::from_le_bytes_validated(header_bytes)
+            .ok_or_else(|| map_error_code(py, ERR_PORT_FAILURE, 0, None))?;
+        self.inner
+            .write_header(&hdr)
+            .map_err(|e| map_error_code(py, e.0, 0, None))
+    }
+
+    fn write(&mut self, py: Python<'_>, record_bytes: &[u8]) -> PyResult<()> {
+        let rec = TraceRecord::from_le_bytes(record_bytes)
+            .ok_or_else(|| map_error_code(py, ERR_PORT_FAILURE, 0, None))?;
+        self.inner
+            .write(&rec)
+            .map_err(|e| map_error_code(py, e.0, 0, None))
+    }
+
+    fn sync(&mut self, py: Python<'_>) -> PyResult<()> {
+        self.inner
+            .sync()
+            .map_err(|rc| map_error_code(py, rc, 0, None))
+    }
+}
+
 struct PyStrategyAdapter {
     obj: Py<PyAny>,
     lease: ViewLease,
@@ -1782,6 +1877,8 @@ fn _core(py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PySimExecution>()?;
     m.add_class::<PyKernel>()?;
     m.add_class::<PyArrowResultStream>()?;
+    m.add_class::<PyDiskSnapshotPort>()?;
+    m.add_class::<PyDiskTraceSink>()?;
 
     m.add("KernelError", py.get_type::<KernelError>())?;
     m.add("KernelFatalError", py.get_type::<KernelFatalError>())?;

@@ -67,12 +67,25 @@ pub(crate) struct ParsedSnapshot<'a> {
     pub(crate) exec_state: &'a [u8],
 }
 
-/// EK-DS-001 4.3節の形式検査と、EK-DD-001 3.3節の設定・PRNG 一致検査を行う（状態を変更しない）。
-pub(crate) fn parse_and_validate<'a>(
+struct ParsedHeaderSections<'a> {
+    snap_cfg: SnapshotConfig,
+    now_ns: i64,
+    processed_event_count: u64,
+    next_action_sequence_id: u64,
+    prng_alg: u16,
+    prng_state: [u64; 4],
+    arena_sec: &'a [u8],
+    merge_sec: &'a [u8],
+    action_sec: &'a [u8],
+    history_sec: &'a [u8],
+    feed_states_sec: &'a [u8],
+    exec_state: &'a [u8],
+}
+
+fn validate_format_sections<'a>(
     blob: &'a [u8],
-    expected_config: &KernelConfig,
-    expected_stream_count: u32,
-) -> Result<ParsedSnapshot<'a>, i32> {
+    require_seekable_feeds: bool,
+) -> Result<ParsedHeaderSections<'a>, i32> {
     if blob.len() < SNAPSHOT_HEADER_SIZE {
         return Err(ERR_SNAPSHOT_INVALID);
     }
@@ -170,7 +183,6 @@ pub(crate) fn parse_and_validate<'a>(
     let feed_states_sec = sections[7].ok_or(ERR_SNAPSHOT_INVALID)?;
     let exec_state_sec = sections[8].ok_or(ERR_SNAPSHOT_INVALID)?;
 
-    // 1. 形式の内部構造と予約領域の検査（ERR_SNAPSHOT_INVALID）。
     let snap_cfg = parse_config_section(config_sec)?;
     let (now_ns, processed_event_count, next_action_sequence_id) = parse_clock_section(clock_sec)?;
     let (prng_alg, prng_state) = parse_prng_section(prng_sec)?;
@@ -193,29 +205,66 @@ pub(crate) fn parse_and_validate<'a>(
         feed_states_sec,
         snap_cfg.stream_count,
         snap_cfg.feed_token_max_bytes,
+        require_seekable_feeds,
     )?;
     let exec_state = parse_exec_state(exec_state_sec, snap_cfg.exec_state_max_bytes)?;
 
+    Ok(ParsedHeaderSections {
+        snap_cfg,
+        now_ns,
+        processed_event_count,
+        next_action_sequence_id,
+        prng_alg,
+        prng_state,
+        arena_sec,
+        merge_sec,
+        action_sec,
+        history_sec,
+        feed_states_sec,
+        exec_state,
+    })
+}
+
+/// EK-DS-001 4.3節のスナップショット読み込み時形式検査を行う（アダプタ層の復旧確認向け）。
+pub fn validate_snapshot_format(blob: &[u8]) -> Result<(), i32> {
+    let parsed = validate_format_sections(blob, false)?;
+    if parsed.snap_cfg.prng_algorithm != PRNG_ALGORITHM_XOSHIRO256
+        || parsed.prng_alg != PRNG_ALGORITHM_XOSHIRO256
+        || parsed.arena_sec.len() as u64 != parsed.snap_cfg.arena_size
+    {
+        return Err(ERR_SNAPSHOT_INVALID);
+    }
+    Ok(())
+}
+
+/// EK-DS-001 4.3節の形式検査と、EK-DD-001 3.3節の設定・PRNG 一致検査を行う（状態を変更しない）。
+pub(crate) fn parse_and_validate<'a>(
+    blob: &'a [u8],
+    expected_config: &KernelConfig,
+    expected_stream_count: u32,
+) -> Result<ParsedSnapshot<'a>, i32> {
+    let p = validate_format_sections(blob, true)?;
+
     // 2. 現在の設定・PRNG との一致検査（ERR_SNAPSHOT_MISMATCH、DD 3.3節）。
-    if !snap_cfg.matches(expected_config, expected_stream_count)
-        || snap_cfg.prng_algorithm != PRNG_ALGORITHM_XOSHIRO256
-        || prng_alg != PRNG_ALGORITHM_XOSHIRO256
-        || arena_sec.len() as u64 != expected_config.arena_size
+    if !p.snap_cfg.matches(expected_config, expected_stream_count)
+        || p.snap_cfg.prng_algorithm != PRNG_ALGORITHM_XOSHIRO256
+        || p.prng_alg != PRNG_ALGORITHM_XOSHIRO256
+        || p.arena_sec.len() as u64 != expected_config.arena_size
     {
         return Err(ERR_SNAPSHOT_MISMATCH);
     }
 
     Ok(ParsedSnapshot {
-        now_ns,
-        processed_event_count,
-        next_action_sequence_id,
-        prng_state,
-        state_arena: arena_sec,
-        merge_heads: merge_sec,
-        action_queue: action_sec,
-        history_ring: history_sec,
-        feed_states: feed_states_sec,
-        exec_state,
+        now_ns: p.now_ns,
+        processed_event_count: p.processed_event_count,
+        next_action_sequence_id: p.next_action_sequence_id,
+        prng_state: p.prng_state,
+        state_arena: p.arena_sec,
+        merge_heads: p.merge_sec,
+        action_queue: p.action_sec,
+        history_ring: p.history_sec,
+        feed_states: p.feed_states_sec,
+        exec_state: p.exec_state,
     })
 }
 
@@ -400,6 +449,7 @@ fn validate_feed_states(
     sec: &[u8],
     stream_count: u32,
     feed_token_max_bytes: u32,
+    require_seekable: bool,
 ) -> Result<(), i32> {
     let count = read_u64(sec, 0)?;
     if count != u64::from(stream_count) {
@@ -426,7 +476,7 @@ fn validate_feed_states(
         if entry_end > sec.len() {
             return Err(ERR_SNAPSHOT_INVALID);
         }
-        if entry_flags == 0 {
+        if require_seekable && entry_flags == 0 {
             return Err(ERR_SNAPSHOT_MISMATCH);
         }
         pos = entry_end;
