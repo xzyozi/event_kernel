@@ -64,6 +64,48 @@ event-kernel-adapters = { path = "external/event_kernel/adapters" }
 - `core/` 単体での実装例は `core/tests/common/mod.rs`（`VecFeed`、`FillNextExec`、`RecordingStrategy`）と `core/benches/step_throughput.rs`（いずれもテスト・計測用で非公開 API）、`ek_adapters` の利用例は `adapters/tests/adapters_contract.rs` を参照してください。
 - Python の `InMemoryMarketFeed` / `SimExecution` は `bindings/python` 内のラッパ型であり、Rust からは代わりに `ek_adapters` の `VecFeedAdapter` / `SimExecutionAdapter` を利用します。
 
+## Python から利用する（サブモジュール等）
+
+PyPI や事前配布 wheel は公開していないため、サブモジュールとして追加して利用側環境で都度ビルドします（`bindings/python/` は `develop` ブランチに配置されています）。
+
+### 1. 前提環境
+
+- **ブランチ**: `develop`（`main` は `v0.0.1` のため `bindings/python/` を含みません）
+- **Rust**: `rustup` / `cargo`（`rust-toolchain.toml` 指定の `1.97.1` が自動選択されます）
+- **Python / `uv`**: Python 3.10 以上（`requires-python = ">=3.10"`）、`uv`
+- **C ツールチェーン**: Windows は MSVC Build Tools、Linux は `cc` / `gcc`、macOS は Xcode Command Line Tools
+- **`maturin`**: `bindings/python/pyproject.toml` の `[build-system]` によりビルド分離環境へ自動導入されるため、利用側プロジェクトへの事前インストールは不要です
+
+### 2. 追加とインストール
+
+```bash
+git submodule add -b develop https://github.com/xzyozi/event_kernel external/event_kernel
+uv venv
+uv pip install ./external/event_kernel/bindings/python
+```
+
+- `uv pip install -v` を指定すると、`maturin pep517 build-wheel` により `bindings/python/pyproject.toml`（`module-name = "event_kernel._core"`）および workspace の `release` プロファイル（LTO・`panic = "unwind"`）でビルドされた wheel が生成・導入されます（Arrow 出力も利用する場合は利用側環境へ `pyarrow` / `polars` / `numpy` を別途追加してください）。
+
+### 3. サブモジュール更新時の再インストール
+
+```bash
+git submodule update --remote external/event_kernel
+uv pip install --reinstall ./external/event_kernel/bindings/python
+```
+
+- ローカルディレクトリ指定の `uv pip install ./external/event_kernel/bindings/python` でも変更時に再ビルドされますが、利用側の `pyproject.toml` 経由やキャッシュを確実にバイパスするため更新時は `--reinstall`（`uv sync` 運用時は `uv sync --reinstall-package event-kernel`）を推奨します。
+
+### 4. 失敗時の見分け方・契約テスト実行
+
+- **`Failed to build event-kernel` / `Call to maturin.build_wheel failed` / `Cargo metadata failed`（`rustc` / `cargo` 実行不可）**: Rust ツールチェーン未導入または `PATH`（例: `~/.cargo/bin`）未設定です。サブモジュール配下で `rustc --version`（`1.97.1`）と C コンパイラの有無を確認してください。
+- **サブモジュール配下の FFI 契約テスト（`test_ffi_contract.py`）を回す場合**: テスト依存（`pytest numpy pyarrow polars`）に加えて C ABI 共有ライブラリ（`ek_capi`）が必要なため、先に以下を実行してください（未ビルド時は `libek_capi` 参照の 2 件が `FileNotFoundError` になります）。
+
+```bash
+(cd external/event_kernel && cargo build -p event-kernel-capi --locked --release)
+uv pip install pytest numpy pyarrow polars
+.venv/bin/pytest external/event_kernel/bindings/python/tests/test_ffi_contract.py -v
+```
+
 ## ローカル検証コマンド
 
 環境ごとの前提や詳細手順は [EK-SETUP-001](docs/setup/EK-SETUP-001_環境構築手順書.md) を参照してください。
