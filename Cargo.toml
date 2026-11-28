@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["core", "core-capi", "bindings/python"]
+members = ["core", "core-capi", "adapters", "bindings/python"]
 
 [workspace.package]
 edition = "2024"

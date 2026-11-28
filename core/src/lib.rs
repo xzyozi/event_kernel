@@ -43,7 +43,7 @@ pub use ports::{
 pub use prng::Prng;
 pub use snapshot::{
     SNAPSHOT_FORMAT_MAJOR, SNAPSHOT_FORMAT_MINOR, SNAPSHOT_HEADER_SIZE, SNAPSHOT_MAGIC,
-    SNAPSHOT_REQUIRED_SECTION_COUNT,
+    SNAPSHOT_REQUIRED_SECTION_COUNT, validate_snapshot_format,
 };
 pub use status::*;
 pub use trace::{

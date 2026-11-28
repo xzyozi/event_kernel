@@ -83,6 +83,40 @@ impl TraceHeader {
         }
         out
     }
+
+    /// EK-DS-001 4.3節に基づき 32 バイトの `TRACE_HEADER` を検証して復号する。
+    pub fn from_le_bytes_validated(bytes: &[u8]) -> Option<Self> {
+        let header = bytes.get(..Self::SIZE)?;
+        let magic: [u8; 4] = header.get(0..4)?.try_into().ok()?;
+        let format_major = u16::from_le_bytes(header.get(4..6)?.try_into().ok()?);
+        let format_minor = u16::from_le_bytes(header.get(6..8)?.try_into().ok()?);
+        let record_size = u32::from_le_bytes(header.get(8..12)?.try_into().ok()?);
+        let hash_algorithm = u16::from_le_bytes(header.get(12..14)?.try_into().ok()?);
+        let reserved0 = u16::from_le_bytes(header.get(14..16)?.try_into().ok()?);
+        let hash_interval = u64::from_le_bytes(header.get(16..24)?.try_into().ok()?);
+        let reserved1: [u8; 8] = header.get(24..32)?.try_into().ok()?;
+
+        if magic != TRACE_MAGIC
+            || format_major != TRACE_FORMAT_MAJOR
+            || record_size < TraceRecord::SIZE as u32
+            || !record_size.is_multiple_of(8)
+            || hash_algorithm != TRACE_HASH_ALGORITHM_XXH3_64
+            || reserved0 != 0
+            || reserved1 != [0u8; 8]
+        {
+            return None;
+        }
+        Some(Self {
+            magic,
+            format_major,
+            format_minor,
+            record_size,
+            hash_algorithm,
+            reserved0,
+            hash_interval,
+            reserved1,
+        })
+    }
 }
 
 /// トレースレコード（40バイト）。配置は EK-DS-001 2.2節を正本とする。
@@ -142,5 +176,25 @@ impl TraceRecord {
             slot.copy_from_slice(&self.reserved);
         }
         out
+    }
+
+    /// EK-DS-001 2.2 / 4.3節のリトルエンディアン表現（先頭 40 バイト）から復号する。
+    pub fn from_le_bytes(bytes: &[u8]) -> Option<Self> {
+        let rec = bytes.get(..Self::SIZE)?;
+        let reserved: [u8; 6] = rec.get(34..40)?.try_into().ok()?;
+        let trace_flags = u16::from_le_bytes(rec.get(32..34)?.try_into().ok()?);
+        if reserved != [0u8; 6] || (trace_flags & !TRACE_FLAG_HASH_PRESENT) != 0 {
+            return None;
+        }
+        Some(Self {
+            timestamp_ns: i64::from_le_bytes(rec.get(0..8)?.try_into().ok()?),
+            sequence_id: u64::from_le_bytes(rec.get(8..16)?.try_into().ok()?),
+            stream_id: u32::from_le_bytes(rec.get(16..20)?.try_into().ok()?),
+            event_type: u16::from_le_bytes(rec.get(20..22)?.try_into().ok()?),
+            event_flags: u16::from_le_bytes(rec.get(22..24)?.try_into().ok()?),
+            state_hash: u64::from_le_bytes(rec.get(24..32)?.try_into().ok()?),
+            trace_flags,
+            reserved,
+        })
     }
 }

@@ -14,5 +14,6 @@ crate-type = ["cdylib", "rlib"]
 extension-module = ["pyo3/extension-module"]
 
 [dependencies]
+event-kernel-adapters = { path = "../../adapters" }
 event-kernel-core = { path = "../../core" }
 pyo3 = "0.30.1"

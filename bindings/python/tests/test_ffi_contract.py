@@ -719,3 +719,47 @@ def test_tc025_v05_qg013_view_guard_lifetime_invalidation() -> None:
     with pytest.raises(RuntimeError):
         memoryview(retained_batches[0])
 
+
+def test_tc016_python_disk_snapshot_and_trace_adapters(tmp_path: Path) -> None:
+    snap_dir = tmp_path / "snaps"
+    trace_dir = tmp_path / "traces"
+    snap_port = ek.DiskSnapshotPort(str(snap_dir), "py-run-1")
+    trace_sink = ek.DiskTraceSink(str(trace_dir), "py-run-1")
+
+    cfg = ek.KernelConfig(
+        history_ring_len=16,
+        arena_size=4096,
+        strategy_arena_size=128,
+        hash_interval=1,
+        trace_enabled=True,
+    )
+    kernel = ek.Kernel(
+        cfg,
+        [ek.InMemoryMarketFeed([100, 200, 300, 400])],
+        ek.SimExecution(delay_ns=5),
+        _SubmitActionStrategy(),
+        trace_sink=trace_sink,
+    )
+    r1 = kernel.step()
+    assert r1.status == 0
+    kernel.capture(snap_port)
+    snap_file = Path(snap_port.snapshot_path(r1.now_ns, r1.processed_event_count))
+    assert snap_file.exists()
+
+    # 同一キー再保存は SnapshotIoError で拒否されること
+    with pytest.raises(ek.SnapshotIoError):
+        kernel.capture(snap_port)
+
+    end_res = kernel.run()
+    assert end_res.status == ek.StepStatus.FINISHED
+    expected_digest = kernel.state_digest()
+    trace_sink.sync()
+    assert Path(trace_sink.path()).exists()
+
+    # 途中スナップショットから restore し再完走しても完全一致すること
+    blob = snap_port.load(r1.now_ns, r1.processed_event_count)
+    kernel.restore(blob)
+    assert kernel.run().status == ek.StepStatus.FINISHED
+    assert kernel.state_digest() == expected_digest
+
+
