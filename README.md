@@ -31,27 +31,37 @@
 
 ## Rust から利用する（サブモジュール等）
 
-利用側の `Cargo.toml` に `core/` への path 依存を追加します（crate は公開していません）。コード中のライブラリ名は `ek_core` です。Rust 1.97 以上が必要です。
+利用側の `Cargo.toml` に `core/`（および `std` 環境で既製アダプタを使う場合は `adapters/`）への path 依存を追加します（crate は公開していません）。コード中のライブラリ名は `core/` が `ek_core`、`adapters/` が `ek_adapters` です。Rust 1.97 以上が必要です。
 
 ```toml
 [dependencies]
 event-kernel-core = { path = "external/event_kernel/core" }
+# 既製のフィード・約定・永続化実装を使う場合（std 環境）
+event-kernel-adapters = { path = "external/event_kernel/adapters" }
 ```
 
-`core/` は、入出力を trait（ポート）で受け取ります。既製のフィード実装・約定実装は提供していないため、利用側で次を実装して `Kernel::create(config, feed, exec, strategy)` に渡します（詳細は [EK-DD-001](docs/design/EK-DD-001_カーネルコア詳細設計書.md) 2.7 節、2.8 節と `core/src/ports.rs`）。
+### 提供方針（`core/` は trait のみ、既製実装は `adapters/`）
+
+- **`core/` (`ek_core`, `#![no_std]`)**: 既製のフィード・約定実装は持たず、入出力は trait（ポート）のみで受け取ります。最小の `no_std` / `#![forbid(unsafe_code)]` 境界を保つための方針です（詳細は [EK-DD-001](docs/design/EK-DD-001_カーネルコア詳細設計書.md) 2.7 節、2.8 節と `core/src/ports.rs`）。
+- **`adapters/` (`ek_adapters`, `std` / `#![forbid(unsafe_code)]`)**: 「呼び出しだけ」で利用できる既製実装を提供します。`Strategy` だけを自前で実装し、以下の既製型と組み合わせて `Kernel::create` / `create_multi` / `create_with_trace` へ渡せます。
+  - **フィード（`EventFeedPort`）**: `VecFeedAdapter`（インメモリ、既定で `seekable: true`）、`CsvFeed`、`BinarySoaFeed`、`ParquetFeed`
+  - **約定（`ExecutionPort`）**: `SimExecutionAdapter`（決定論遅延・状態保存/復元対応）
+  - **永続化（`SnapshotPort` / `TraceSink`）**: `MemorySnapshotStore`、`DiskSnapshotStore`（原子書き込み）、`DiskTraceSink`、`TraceLogReader`
+
+### `core/` のポート実装範囲（自前実装する場合）
 
 | trait | 利用側の実装 | 必須メソッド | 既定実装があるメソッド |
 | :--- | :--- | :--- | :--- |
-| `EventFeedPort` | 必須 | `peek_next_timestamp`, `pop_next` | `position`, `validate_position`, `seek`（既定は位置を戻せないフィード） |
-| `ExecutionPort` | 必須 | `on_arrival`, `on_market_event`, `poll_result` | `capture_state`, `validate_state`, `restore_state`（既定は状態なし） |
+| `EventFeedPort` | 必須（または `ek_adapters` 利用） | `peek_next_timestamp`, `pop_next` | `position`, `validate_position`, `seek`（既定は位置を戻せないフィード） |
+| `ExecutionPort` | 必須（または `ek_adapters` 利用） | `on_arrival`, `on_market_event`, `poll_result` | `capture_state`, `validate_state`, `restore_state`（既定は状態なし） |
 | `Strategy` | 必須 | `on_event` | なし |
-| `TraceSink` | 任意 | `write_header`, `write` | `is_present`。登録しない場合は `Kernel::create` を使う（内部で `NoTraceSink`）。登録する場合は `Kernel::create_with_trace` |
-| `SnapshotPort` | 任意 | `store` | なし。`Kernel::capture` を呼ぶときだけ渡す |
+| `TraceSink` | 任意（または `DiskTraceSink` 利用） | `write_header`, `write` | `is_present`。登録しない場合は `Kernel::create` を使う（内部で `NoTraceSink`）。登録する場合は `Kernel::create_with_trace` |
+| `SnapshotPort` | 任意（または `MemorySnapshotStore` / `DiskSnapshotStore` 利用） | `store` | なし。`Kernel::capture` を呼ぶときだけ渡す |
 
 - 複数フィードを使う場合は `Kernel::create_multi` を使います。
 - スナップショットの保存（`Kernel::capture`）と復元（`Kernel::restore`）を使う場合は、`EventFeedPort` の `position` が `seekable: true` を返し、`seek` と `validate_position` も実装してください。位置を戻せないフィードがあると、保存は `ERR_SNAPSHOT_UNSUPPORTED` で失敗します。`ExecutionPort` の内部状態を持つ場合は `capture_state` / `validate_state` / `restore_state` も実装します。
-- 実装例は `core/tests/common/mod.rs`（`VecFeed`、`FillNextExec`、`RecordingStrategy`）と `core/benches/step_throughput.rs` を参照してください。いずれもテスト・計測用で、公開 API ではありません。
-- Python の `InMemoryMarketFeed` / `SimExecution` は `bindings/python` 内の型で、`core/` からは使えません。
+- `core/` 単体での実装例は `core/tests/common/mod.rs`（`VecFeed`、`FillNextExec`、`RecordingStrategy`）と `core/benches/step_throughput.rs`（いずれもテスト・計測用で非公開 API）、`ek_adapters` の利用例は `adapters/tests/adapters_contract.rs` を参照してください。
+- Python の `InMemoryMarketFeed` / `SimExecution` は `bindings/python` 内のラッパ型であり、Rust からは代わりに `ek_adapters` の `VecFeedAdapter` / `SimExecutionAdapter` を利用します。
 
 ## ローカル検証コマンド
 
