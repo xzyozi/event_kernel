@@ -5,9 +5,9 @@ document_number: "EK-ENV-001"
 document_role: "normative"
 ssot_scope: "environment"
 status: "draft"
-version: "0.5"
+version: "0.6"
 created_at: "2026-11-24"
-updated_at: "2026-11-27"
+updated_at: "2026-11-28"
 author: "xzyozi"
 owner: "xzyozi"
 purpose: "Deterministic Event Kernelの開発・検証環境、ツールチェーン、品質ゲートを定義し、設計書とテスト文書がゲートIDで参照できるようにするため"
@@ -83,7 +83,7 @@ related_documents:
 
 ### 4.4 CI/CD・品質ゲート
 
-実行契機は、`main` と `develop` への push、およびこれらへの PR とする（既存の `ci-python.yml` と同じ）。Rust 用のワークフロー `.github/workflows/ci-rust.yml` は **QG-001〜QG-007・QG-012・QG-013** を実装済みであり、定期・手動ワークフロー `.github/workflows/miri.yml` は **QG-009**（nightly Miri）を実装済みである。残る定期ゲート `QG-008`（標準ベンチマーク定期実行）は基準機確定（OPEN-06）後に別ワークフローで追加する。
+実行契機は、`main` と `develop` への push、およびこれらへの PR とする（既存の `ci-python.yml` と同じ）。Rust 用のワークフロー `.github/workflows/ci-rust.yml` は **QG-001〜QG-007・QG-012・QG-013**（`test` および `ffi-gates` は Ubuntu / Windows マトリクス）を実装済みである。定期・手動ゲートとして `.github/workflows/bench.yml`（**QG-008**）および `.github/workflows/miri.yml`（**QG-009**）、依存脆弱性検査として `.github/workflows/audit.yml`（`cargo audit`）を整備済みである。
 
 品質ゲートは次の表を正本とする。設計書とテスト文書は、ゲートIDで参照する。
 
@@ -125,7 +125,7 @@ related_documents:
 
 - **ロックファイル**: `Cargo.lock` と `uv.lock` をコミットする。Rust は `--locked` を付けてビルドとテストを実行する。
 - **ツールチェーンの固定**: `rust-toolchain.toml`、`.python-version`。
-- **公開直後のパッケージの回避**: Python は `uv` のグローバル設定（`exclude-newer`）に従う。Rust には同等の標準機能がないため、依存の追加と更新は PR で内容を確認する。依存の脆弱性検査ツール（`cargo audit` など）を使うかどうかは未確定とし、依存を追加する時点で決める。
+- **公開直後のパッケージの回避・脆弱性検査**: Python は `uv` のグローバル設定（`exclude-newer`）に従う。Rust は依存の追加と更新を PR で内容確認するとともに、`.github/workflows/audit.yml`（`cargo audit --deny warnings`）で脆弱性アドバイザリを定期・変更時検査する。
 - **決定論性に関わる設定**: ビルドの構成（最適化レベル、LTO）を変えた場合も、QG-006 の出力ハッシュが一致することを確認する。
 
 ## 5. 検証方法
@@ -142,7 +142,7 @@ related_documents:
 | ID     | 対象             | 標準との差異                  | 理由・制約                 | 影響                                                              | 代替対応                                        | 解除条件                     |
 | :----- | :--------------- | :---------------------------- | :------------------------- | :---------------------------------------------------------------- | :---------------------------------------------- | :--------------------------- |
 | EX-001 | ローカルの開発機 | Rust のツールチェーンが未導入（または一部検証機） | 導入は依頼がある場合に限る | スパイク（V-01〜V-06）と Rust のゲートをローカルで実行できない環境がある | CI（`ci-rust.yml`）または Rust 導入済み計算機で実行する | 開発機へのツールチェーン導入 |
-| EX-002 | CI               | 定期ベンチゲート（QG-008）が未追加 | `ci-rust.yml`（QG-001〜007, QG-012, QG-013）および `miri.yml`（QG-009）は実装済み | 標準ベンチマークのみ自動定期実行が未整備 | 手動実行および `OPEN-06` 確定後に定期ワークフローを追加する | `QG-008` 定期ワークフローの追加 |
+| EX-002 | CI               | 【解除済み】境界層・定期ベンチ・Miri・脆弱性検査を整備済み | `ci-rust.yml`（QG-001〜007, 012, 013）・`bench.yml`（QG-008）・`miri.yml`（QG-009）・`audit.yml` がすべて整備済み | 差異なし | CI で自動・定期実行する（`OPEN-06` 正式基準機判定のみ別途 `#19` で確定） | 解除済み |
 
 ### 6.1 未確定事項
 
@@ -150,11 +150,11 @@ related_documents:
 | :---------------------- | :------------------------------------------------------------------------------------------------------------------------------------------------------ | :------------------------------- |
 | Rust のバージョン       | 【解決済み】1.97.1 に決定した（4.1節）。`rustup` がない計算機では、`rust-toolchain.toml` の固定が効かないため、版の一致は CI の固定とシステムの版で保つ | ツールチェーンの導入時           |
 | `abi3` の採否           | 【解決済み】当面は非 `abi3`（標準 Python バージョン別 wheel）を採用（4.3節、ADR-003 5.2節）                                                            | ADR-003 スパイク完了（決定済み） |
-| 脆弱性検査ツール        | `cargo audit` などを使うか（4.6節）                                                                                                                     | 最初の依存を追加する時点         |
+| 脆弱性検査ツール        | 【解決済み】`cargo audit` を `.github/workflows/audit.yml` へ導入済み（4.6節）                                                                          | 導入済み                         |
 | QG-003 の検査スクリプト | 【解決済み】`.github/scripts/check_core_attrs.py` として作成済み（4.4節）                                                                               | `core/` を作る PR（完了）        |
 | `core/clippy.toml`      | 【解決済み】作成し、`core/src/lib.rs` の `#![deny(...)]` と併せて運用中（4.4節の注）                                                                    | `core/` を作る PR（完了）        |
 | 性能の基準機            | OPEN-06（2章）                                                                                                                                          | テスト計画の作成・基準機確定時   |
-| `ci-rust.yml` / `miri.yml` | 【一部解決（残 `QG-008`）】`ci-rust.yml` に QG-001〜007/012/013、`miri.yml` に QG-009 を実装済み。残余は `QG-008` 定期ベンチのみ                         | `QG-008` 定期ワークフロー PR     |
+| `ci-rust.yml` / `miri.yml` / `bench.yml` | 【解決済み】`ci-rust.yml`（Ubuntu/Windows FFI含む）、`miri.yml`（QG-009）、`bench.yml`（QG-008）、`audit.yml` をすべて整備済み | 整備完了 |
 
 ## 7. 関連文書
 
@@ -185,3 +185,4 @@ related_documents:
 | Rev.0.2 | 2026-11-24 | xzyozi | レビュー指摘を反映。Rev.0.1 の「後続作業を反映した」は、品質ゲートの登録だけが対象で、Rust のバージョンと lint の具体的な設定は未確定だった。合格基準を AC-ID の参照にした。`cbindgen` と `maturin` のゲート（QG-012）、Python 側のビュー無効化のゲート（QG-013）を追加し、V-04 と V-06 を QG-007 に含めた。V-05 を Rust 側（Miri）と Python 側（pytest）に分けた。ゲートの対象戦略とCIの実行範囲を明確化し、未確定事項を 6.1節にまとめた。 |
 | Rev.0.4 | 2026-11-27 | xzyozi | 社内の Linux 計算機追記を反映した環境基盤調整。                                                                                                                                                                                                                                                                                                                                                                                           |
 | Rev.0.5 | 2026-11-27 | xzyozi | ADR-003 承認に伴い `abi3` 採否（非 `abi3` 標準 wheel）を確定。`ci-rust.yml` への `QG-007`/`QG-012`/`QG-013` 追加および `miri.yml`（`QG-009`）追加を反映し、`EX-002`・6.1節を更新。 |
+| Rev.0.6 | 2026-11-28 | xzyozi | `bench.yml`（`QG-008`）・`audit.yml`（`cargo audit`）追加および `ci-rust.yml` `ffi-gates` の Ubuntu/Windows マトリクス拡張を反映し、`EX-002`・6.1節を解除済みに更新（Issue #18）。 |
