@@ -27,6 +27,7 @@ mod snapshot;
 pub mod status;
 mod trace;
 mod util;
+pub mod view;
 
 pub use config::{KernelConfig, MAX_STREAMS};
 pub use event::{
@@ -42,10 +43,11 @@ pub use ports::{
 pub use prng::Prng;
 pub use snapshot::{
     SNAPSHOT_FORMAT_MAJOR, SNAPSHOT_FORMAT_MINOR, SNAPSHOT_HEADER_SIZE, SNAPSHOT_MAGIC,
-    SNAPSHOT_REQUIRED_SECTION_COUNT,
+    SNAPSHOT_REQUIRED_SECTION_COUNT, validate_snapshot_format,
 };
 pub use status::*;
 pub use trace::{
     TRACE_FLAG_HASH_PRESENT, TRACE_FORMAT_MAJOR, TRACE_FORMAT_MINOR, TRACE_HASH_ALGORITHM_XXH3_64,
     TRACE_MAGIC, TraceHeader, TraceRecord,
 };
+pub use view::{ViewGuard, ViewLease, ViewToken};

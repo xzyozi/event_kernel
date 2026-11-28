@@ -105,36 +105,55 @@ fn latency_must_be_positive_and_in_range() {
 
 #[test]
 fn full_queue_returns_queue_full_without_poison() {
-    struct Flood(Vec<i32>);
+    struct Flood {
+        attempts: usize,
+        results: Vec<i32>,
+    }
     impl Strategy for Flood {
         fn on_event(
             &mut self,
             context: &mut Context<'_>,
             _event: EventRecord<'_>,
         ) -> StrategyStatus {
-            for _ in 0..17 {
+            for _ in 0..self.attempts {
                 let action = Action {
                     action_kind: 0,
                     latency_ns: 1,
                     payload: &[],
                 };
-                self.0.push(context.submit_action(&action));
+                self.results.push(context.submit_action(&action));
             }
             0
         }
     }
+    let baseline = Kernel::create(
+        config(),
+        VecFeed::ticks(&[10]),
+        FillNextExec::new(),
+        Flood {
+            attempts: 16,
+            results: Vec::new(),
+        },
+    )
+    .unwrap();
+    assert_eq!(baseline.step().status, OK);
+
     let kernel = Kernel::create(
         config(),
         VecFeed::ticks(&[10]),
         FillNextExec::new(),
-        Flood(Vec::new()),
+        Flood {
+            attempts: 17,
+            results: Vec::new(),
+        },
     )
     .unwrap();
-    // capacity 16 の17件目が ERR_QUEUE_FULL。
+    // capacity 16 の17件目が ERR_QUEUE_FULL。状態ハッシュは16件投入時と一致する（AC-08）。
     let result = kernel.step();
     assert_eq!(result.status, OK);
     assert_eq!(kernel.state(), HandleState::Ready);
-    let status = kernel.inspect(|_, _, s| s.0.clone()).unwrap();
+    assert_eq!(kernel.state_digest(), baseline.state_digest());
+    let status = kernel.inspect(|_, _, s| s.results.clone()).unwrap();
     assert_eq!(status.iter().filter(|&&s| s == OK).count(), 16);
     assert_eq!(status.last(), Some(&ERR_QUEUE_FULL));
 }

@@ -1,11 +1,15 @@
 [workspace]
 resolver = "3"
-members = ["core"]
+members = ["core", "core-capi", "adapters", "bindings/python"]
 
 [workspace.package]
 edition = "2024"
 rust-version = "1.97"
 
-# 要件定義書 8章の測定条件（--release、LTO 有効）。bench プロファイルは release を継承する。
+# 要件定義書 8章の測定条件（--release、LTO 有効）と、ADR-003 5.1-4（catch_unwind 用 panic = "unwind"）。
+[profile.dev]
+panic = "unwind"
+
 [profile.release]
 lto = true
+panic = "unwind"

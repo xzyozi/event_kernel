@@ -1,0 +1,46 @@
+# Rust 依存クレート脆弱性検査ワークフロー（EK-ENV-001 4.6節・6.1節）。
+name: Rust Security Audit
+on:
+  schedule:
+    - cron: '0 5 * * 1'
+  workflow_dispatch:
+  pull_request:
+    branches: [ main, develop ]
+    paths:
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - 'core/Cargo.toml'
+      - 'core-capi/Cargo.toml'
+      - 'bindings/python/Cargo.toml'
+      - 'adapters/Cargo.toml'
+      - '.cargo/audit.toml'
+      - '.github/workflows/audit.yml'
+  push:
+    branches: [ main, develop ]
+    paths:
+      - 'Cargo.lock'
+      - '.cargo/audit.toml'
+      - '.github/workflows/audit.yml'
+permissions:
+  contents: read
+concurrency:
+  group: ci-audit-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+env:
+  CARGO_TERM_COLOR: always
+jobs:
+  audit:
+    name: Cargo Audit
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      - name: Install toolchain from rust-toolchain.toml
+        run: rustup toolchain install
+      - name: Install cargo-audit
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-audit
+      - name: Run cargo audit
+        run: cargo audit --deny warnings

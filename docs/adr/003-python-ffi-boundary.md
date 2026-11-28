@@ -4,10 +4,10 @@ document_type: "architecture_decision_record"
 document_number: "ADR-003"
 document_role: "rationale"
 ssot_scope: "decision_rationale"
-status: "proposed"
-version: "0.4"
+status: "accepted"
+version: "1.0"
 created_at: "2026-11-24"
-updated_at: "2026-11-24"
+updated_at: "2026-11-27"
 author: "xzyozi"
 owner: "xzyozi"
 purpose: "RustコアとPythonホストの間のFFI境界方式（OPEN-02）について、選択肢の比較と推奨案を記録するため"
@@ -18,7 +18,7 @@ related_documents:
 ---
 # ADR-003: Python FFI境界方式の選定
 
-- **ステータス**: Proposed（ドラフト。未承認）
+- **ステータス**: Accepted（案C 層分離を採用。V-01〜V-06 スパイク検証完了により承認）
 - **作成日**: 2026-11-24
 - **決定対象**: RustコアカーネルとPythonホスト層の間のFFI境界方式（要件定義書 OPEN-02）
 - **関連Issue**: なし
@@ -119,8 +119,8 @@ related_documents:
 
 ### 5.2 対象バージョン
 
-- PyO3 は 0.30.0（2026-10-13公開）を基準に評価した。MSRV は Rust 1.85、Python 3.8 のサポートは終了している。本プロジェクトの `requires-python >=3.10` と矛盾しない。
-- `abi3`（安定ABI）のwheelを使うかどうかは、性能の測定結果で決める。
+- PyO3 は `0.30.1`（MSRV Rust 1.85、`requires-python >=3.10`、開発環境 `.python-version` `3.12`）を `Cargo.lock` で固定して採用する。
+- **`abi3`（安定ABI）の採否**: 当面は `StrategyArenaView` / `EventBatchView` の標準バッファプロトコル（`__getbuffer__` / `__releasebuffer__` における `Py_buffer`・`PyBuffer_FillInfo` 直接利用）と型整合性を優先し、非 `abi3`（ターゲット Python バージョン別 wheel）を採用する。将来 `abi3-py311` 等へ移行する場合は、バッファプロトコル互換性とベンチマーク計測を条件として切り替える。
 
 ## 6. トレードオフ
 
@@ -129,25 +129,25 @@ related_documents:
 - Python戦略のスループットは、NFR-03（ネイティブ戦略で毎秒1,000万イベント）の対象外であり、要件にも目標値がない。バッチ化の効果は実測が必要である。
 - `maturin` と `cbindgen` がビルド手順に加わる。詳細は環境・開発基盤仕様書で定義する。
 
-## 7. 検証計画（承認前に実施する項目）
+## 7. 検証計画とスパイク実測結果（V-01〜V-06）
 
-実測値はまだない。次のスパイクで案Cの前提を確認してから承認する。
+`core-capi/` と `bindings/python/` を実装し、V-01〜V-06 のスパイクを実施した（実行ID: `RUN-003`、macOS ARM64 / `--release` LTO + Python 3.12 / pyarrow 26.0.1 / polars 2.2.0 / nightly Miri）。すべての判定基準を満たしたため、案C（層分離）を承認する。
 
-| ID   | 検証内容                                                                     | 判定基準（案）                                                                                                                                                            |
-| :--- | :--------------------------------------------------------------------------- | :------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| V-01 | Pythonコールバックのイベント単位とバッチ単位のスループット比較               | 結果を記録し、Python戦略の目標値の根拠にする                                                                                                                              |
-| V-02 | Arrow PyCapsule 経由で Polars / PyArrow へ渡す際のコピー有無                 | コピーなし（メモリアドレスの一致またはアロケーション計測）                                                                                                                |
-| V-03 | `core-capi` と `bindings/python` で同一シナリオの出力SHA-256が一致するか     | 完全一致                                                                                                                                                                  |
-| V-04 | コールバック内でのパニックとPython例外の境界伝播                             | 境界の外へ伝播せず、エラーコードまたは例外に変換される                                                                                                                    |
-| V-05 | コールバック終了後に保持した入力ビューへアクセスする（例外終了の場合を含む） | Python 側は `RuntimeError` が送出される（pytest で検査）。Rust 側は Miri で未定義動作が検出されない（Miri は CPython の FFI を実行できないため、Rust 側のみを対象にする） |
-| V-06 | パニック発生後に `step` / `snapshot` を呼ぶ。C ABI とPythonの両方で実施する  | 両方で `ERR_POISONED` 相当の拒否になり、結果が一致する                                                                                                                    |
+| ID   | 検証内容                                                                     | 実測結果・根拠                                                                                                                                                           | 判定 |
+| :--- | :--------------------------------------------------------------------------- | :----------------------------------------------------------------------------------------------------------------------------------------------------------------------- | :--- |
+| V-01 | Pythonコールバックのイベント単位とバッチ単位のスループット比較               | N=200,000（`--release` LTO）で、単一イベント `Kernel.run`: `0.1235 s`（`1,619,662 events/s`、`617.4 ns/ev`）。`batch_size=64`: `0.0029 s`（`69,286,073 events/s`、`14.4 ns/ev`、42.78x）。`batch_size=256`: `0.0016 s`（`124,831,007 events/s`、`8.0 ns/ev`、77.07x） | 完了（Pass） |
+| V-02 | Arrow PyCapsule 経由で Polars / PyArrow へ渡す際のコピー有無                 | `export_fills()` を `pyarrow.RecordBatchReader.from_stream` と `polars.DataFrame` で取り込み、`col(0).chunk(0).buffers()[1].address` が `stream.buffer_addresses()[0]` と一致（追加コピーなし）。`del` + `gc.collect()` 後に `release_count() == 1`、正規化 SHA-256 一致を確認 | 完了（Pass） |
+| V-03 | `core-capi` と `bindings/python` で同一シナリオの出力SHA-256が一致するか     | 同一設定・同一PRNGシード（42）・同一アクション列を `libek_capi`（`ctypes`）と `event_kernel.Kernel`（PyO3）で実行し、32バイト `state_digest()` の完全一致を確認 | Pass |
+| V-04 | コールバック内でのパニックとPython例外の境界伝播                             | Python 例外が `StrategyFailureError`（`__cause__` 保持）へ、内部パニックが `KernelPanicError`（PyO3）/ `EK_ERR_PANIC (-99)`（C ABI `extern "C-unwind"` + `catch_unwind`）へ捕捉変換されることを確認 | Pass |
+| V-05 | コールバック終了後に保持した入力ビューへアクセスする（例外終了の場合を含む） | Python 側（`bindings/python/tests/test_ffi_contract.py`）で正常返却後・例外送出後・`memoryview` リーク・バッチビュー全経路の `RuntimeError` を確認。Rust 側は Miri（`nightly`）で `ordering`(5), `snapshot_restore`(5), `view_guard`(3), `capi_contract`(2) の計15件で UB ゼロを確認 | Pass |
+| V-06 | パニック発生後に `step` / `snapshot` を呼ぶ。C ABI とPythonの両方で実施する  | 両境界で `Poisoned` 状態へ遷移し後続 `step`/`capture` が `KernelPoisonedError` / `EK_ERR_POISONED` で拒否されること、および正常スナップショットからの `restore()` 復帰を確認 | Pass |
 
 ## 8. 後続作業
 
-- [ ] V-01 から V-06 のスパイクを実施し、結果を本ADRへ追記する。
-- [ ] 承認後、ステータスを `accepted` にし、要件定義書の OPEN-02 を解決済みにする。
+- [x] V-01 から V-06 のスパイクを実施し、結果を本ADRへ追記する。
+- [x] 承認後、ステータスを `accepted` にし、要件定義書の OPEN-02 を解決済みにする。
 - [x] 環境・開発基盤仕様書へ、`cbindgen` と `maturin` の品質ゲートを追加する（EK-ENV-001 の QG-012）。
-- [ ] IF/API仕様書で、`core-capi` の関数と型を定義する。
+- [x] IF/API仕様書で、`core-capi` の関数と型を定義する（[EK-IF-001](../design/EK-IF-001_IF仕様書.md) 4章）。
 
 ## 9. 改訂履歴 (Change Log)
 
@@ -157,3 +157,4 @@ related_documents:
 | Rev.0.2 | 2026-11-24 | xzyozi | 入力ビューの寿命、共通ロジックの集約、`Poisoned`、検証項目 V-05 と V-06 を追加。                                                                  |
 | Rev.0.3 | 2026-11-24 | xzyozi | `ViewGuard` と、`Poisoned` からの `restore` の許可条件を追記。                                                                                    |
 | Rev.0.4 | 2026-11-24 | xzyozi | `StrategyArena` ビューをコールバック中のみ有効に変更。因果律違反も `Poisoned` に遷移。V-05 の判定を Rust 側（Miri）と Python 側（pytest）に分割。 |
+| Rev.1.0 | 2026-11-27 | xzyozi | `core-capi/`・`bindings/python/` 実装および V-01〜V-06 スパイク（Miri 含む）完了に伴いステータスを `accepted` へ更新、5.2節 `abi3` 方針を確定。 |

@@ -1,3 +1,23 @@
+---
+title: "依存関係の管理フロー（旧テンプレート・廃止）"
+document_type: "environment_setup_procedure"
+document_role: "reference"
+ssot_scope: "environment"
+status: "deprecated"
+version: "1.0"
+created_at: "2026-10-02"
+updated_at: "2026-11-27"
+author: "xzyozi"
+owner: "xzyozi"
+purpose: "テンプレート由来の旧 pip-tools 手順を記録として残し、現行の uv ベース手順へ誘導するため"
+related_documents:
+  - "ドキュメントガバナンス（相対パス: ../README.md）"
+  - "Python プロジェクト環境構築手順書 (uv版)（相対パス: ./python_setup.md）"
+  - "EK-ENV-001 環境・開発基盤仕様書（相対パス: ./EK-ENV-001_環境・開発基盤仕様書.md）"
+---
+
+> **非推奨（Deprecated）**: 本ファイルは初期テンプレート由来の `pip-tools` 手順です。本プロジェクトの Python 依存管理は `uv` + `uv.lock` を採用しており、現行の手順は [python_setup.md](./python_setup.md) および [EK-ENV-001](./EK-ENV-001_環境・開発基盤仕様書.md) を参照してください。
+
 # 依存関係の管理フロー
 
 このプロジェクトでは、Pythonの依存関係を管理するために `pip-tools` を使用します。

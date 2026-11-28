@@ -4,10 +4,10 @@ document_type: "basic_design"
 document_number: "EK-BD-001"
 document_role: "normative"
 ssot_scope: "system_architecture"
-status: "draft"
-version: "0.9"
+status: "approved"
+version: "1.0"
 created_at: "2026-11-24"
-updated_at: "2026-11-24"
+updated_at: "2026-11-28"
 author: "xzyozi"
 owner: "xzyozi"
 purpose: "Deterministic Event Kernelの全体構造、コンポーネントの責務と依存方向、システム境界、横断的な方針を定め、詳細設計とFFI境界の実装のブレを防ぐため"
@@ -20,6 +20,7 @@ related_documents:
   - "EK-ENV-001 環境・開発基盤仕様書（相対パス: ../setup/EK-ENV-001_環境・開発基盤仕様書.md）"
   - "EK-DD-001 カーネルコア詳細設計書（相対パス: ./EK-DD-001_カーネルコア詳細設計書.md）"
   - "EK-DS-001 データ構造仕様書（相対パス: ./EK-DS-001_データ構造仕様書.md）"
+  - "EK-IF-001 IF仕様書（相対パス: ./EK-IF-001_IF仕様書.md）"
 ---
 
 # 基本設計書（Deterministic Event Kernel システム全体アーキテクチャ）
@@ -161,8 +162,8 @@ flowchart TD
 | C-009            | ハンドル状態と境界共通ロジック     | ハンドルの状態遷移（2.4節）、再入ガード、エラーコード、バッチ分割を提供する。`core-capi` と `bindings/python` が共有する。                                                                                                                                                                                                                                                                                     | C-001 / 安全なRust API                                                                | [EK-DD-001](./EK-DD-001_カーネルコア詳細設計書.md) |
 | C-010            | コンテキストとビュー               | 戦略へ渡す読み取り専用コンテキストと入力バッチのビューを提供する。ビューの無効化は `Drop` のスコープガードで行う。                                                                                                                                                                                                                                                                                             | C-004、C-005 / ビュー                                                                 | [EK-DD-001](./EK-DD-001_カーネルコア詳細設計書.md) |
 | C-011            | トレース出力                       | ステップごとに入力イベントID、現在時刻、状態ハッシュを出力する。                                                                                                                                                                                                                                                                                                                                               | C-001 / トレースの出力先                                                              | [EK-DD-001](./EK-DD-001_カーネルコア詳細設計書.md) |
-| C-012            | `core-capi`                        | C ABI の薄い変換層。`#[repr(C)]` の境界型、ポインタの検証、`catch_unwind` によるパニックの捕捉を担う。                                                                                                                                                                                                                                                                                                         | C-009 / C ABI                                                                         | IF/API仕様書（作成予定）                           |
-| C-013            | `bindings/python`                  | PyO3 による薄い変換層。コールバック、NumPy・Arrow（PyCapsule）の受け渡し、例外変換を担う。                                                                                                                                                                                                                                                                                                                     | C-009 / Python API                                                                    | IF/API仕様書（作成予定）                           |
+| C-012            | `core-capi`                        | C ABI の薄い変換層。`#[repr(C)]` の境界型、ポインタの検証、`catch_unwind` によるパニックの捕捉を担う。                                                                                                                                                                                                                                                                                                         | C-009 / C ABI                                                                         | [EK-IF-001](./EK-IF-001_IF仕様書.md)               |
+| C-013            | `bindings/python`                  | PyO3 による薄い変換層。コールバック、NumPy・Arrow（PyCapsule）の受け渡し、例外変換を担う。                                                                                                                                                                                                                                                                                                                     | C-009 / Python API                                                                    | [EK-IF-001](./EK-IF-001_IF仕様書.md)               |
 | C-014            | アダプタ層                         | データの読み込み（Parquet / CSV）、シミュレーション約定、スナップショットの保存先を、ポートの実装として提供する。                                                                                                                                                                                                                                                                                              | `core` のポート / ポートの実装                                                        | [EK-DD-001](./EK-DD-001_カーネルコア詳細設計書.md) |
 | C-015            | 戦略層                             | ネイティブ戦略とPython戦略。同一のインターフェースで切り替える（FR-06-1）。                                                                                                                                                                                                                                                                                                                                    | C-010 / 戦略インターフェース                                                          | [EK-DD-001](./EK-DD-001_カーネルコア詳細設計書.md) |
 
@@ -307,7 +308,7 @@ stateDiagram-v2
 - [x] 課題ごとに優先度、選定理由、トレードオフ、担当、関連文書を記入した。
 - [x] Mermaid図を実際の構成へ置換した。
 - [x] 全コンポーネントの責務、依存方向、公開インターフェースを記入した。
-- [ ] 全コンポーネントの詳細設計書リンクを記入した（DD と DS は記入済み。IF/API 仕様書は未作成のため、C-012 と C-013 が未記入）。
+- [x] 全コンポーネントの詳細設計書リンクを記入した（C-012・C-013 の `EK-IF-001` リンクを含め記入済み）。
 - [x] 環境・開発基盤仕様書への参照を記入した。
 - [x] 外部システム、信頼境界、失敗時保全を記入した（認証・認可は対象外と明記した）。
 - [x] 未置換の `[ ... ]`、`YYYY-MM-DD`、サンプル固有名が残っていない。
@@ -326,4 +327,6 @@ stateDiagram-v2
 | Rev.0.6 | 2026-11-24 | xzyozi | 3.1節の環境情報（Rust と Python のバージョン、依存管理）を、EK-ENV-001 への参照に置き換えた。二重管理を避けるため。                                                                                                                       |
 | Rev.0.7 | 2026-11-25 | xzyozi | 2.3節のシーケンス図で、参加者名 `Loop` が予約語 `loop` と衝突して Mermaid の構文エラーになるため、`EvLoop` に変更した。                                                                                                                   |
 | Rev.0.8 | 2026-11-25 | xzyozi | エラー処理の方針表に、DD で定義した致命的エラー（入力の順序違反、ポートの失敗、結果の溢れ、戦略の失敗）を追加した。                                                                                                                       |
-| Rev.0.9 | 2026-11-26 | xzyozi | DD と DS のマージに伴い、2.2節の関連詳細設計書の欄に、EK-DD-001 と EK-DS-001 へのリンクを記入した。IF/API 仕様書は未作成のまま。                                                                                                          |
+| Rev.0.9 | 2026-11-26 | xzyozi | DD と DS のマージに伴い、2.2節の関連詳細設計書の欄に、EK-DD-001 と EK-DS-001 へのリンクを記入した（作成時点では IF/API 仕様書は未作成）。                                                                                               |
+| Rev.0.10 | 2026-11-27 | xzyozi | `EK-IF-001` の取り込みに伴い、`related_documents`・C-012/C-013 のリンク・チェックリストを更新した。                                                                                                                                      |
+| Rev.1.0 | 2026-11-28 | xzyozi | `core`・`core-capi`・`adapters`・`bindings/python` 実装および `OPEN-06` / `TC-017` 確定を受け、`version: "1.0"`・`status: "approved"` を確定した。                                                                                       |

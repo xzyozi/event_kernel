@@ -4,16 +4,18 @@ document_type: "environment_specification"
 document_number: "EK-ENV-001"
 document_role: "normative"
 ssot_scope: "environment"
-status: "draft"
-version: "0.3"
+status: "approved"
+version: "1.0"
 created_at: "2026-11-24"
-updated_at: "2026-11-24"
+updated_at: "2026-11-28"
 author: "xzyozi"
 owner: "xzyozi"
 purpose: "Deterministic Event Kernelの開発・検証環境、ツールチェーン、品質ゲートを定義し、設計書とテスト文書がゲートIDで参照できるようにするため"
 related_documents:
   - "ドキュメントガバナンス（相対パス: ../README.md）"
   - "EK-BD-001 基本設計書（相対パス: ../design/EK-BD-001_基本設計書.md）"
+  - "EK-SETUP-001 環境構築手順書（相対パス: ./EK-SETUP-001_環境構築手順書.md）"
+  - "EK-TEST-001 テスト計画・結果報告書（相対パス: ../test/EK-TEST-001_テスト計画・結果報告書.md）"
   - "Deterministic Event Kernel システム要件定義書（相対パス: ../features/deterministic-event-kernel-requirements.md）"
   - "ADR-002 コア実装言語にRustを採用する（相対パス: ../adr/002-core-language-rust.md）"
   - "ADR-003 Python FFI境界方式の選定（相対パス: ../adr/003-python-ffi-boundary.md）"
@@ -36,7 +38,7 @@ related_documents:
 ## 2. ハード要件・制約
 
 - **必須プラットフォーム**: Windows と Linux。決定論性は両OSで検証する（AC-07）。
-- **性能の基準機**: NFR-03 の基準機は未確定（要件定義書 OPEN-06）。確定するまで、AC-06 は参考値として記録し、合否の判定に使わない。
+- **性能の基準機**: `OPEN-06` は確定済み。主基準実機として Apple M3（macOS 14.3 / ARM64 / 16 GB RAM）、x86_64 回帰確認環境として GitHub Actions `ubuntu-latest`（`bench.yml` / `QG-008`）を用い、`AC-06`（NFR-03）の合否を判定する。
 - **ネットワーク・アクセス**: 依存パッケージの取得に外部レジストリを使う。実行時のネットワーク通信は不要。
 - **Rust の最低バージョン**: PyO3 0.30.0 の MSRV は Rust 1.85（ADR-003 5.2節による）。これ以上のバージョンに固定する。具体的なバージョンは 4.1節で定める。
 - **Python の対応範囲**: 3.10 以上（`pyproject.toml` の `requires-python`）。開発用は 3.12（`.python-version`）。
@@ -45,10 +47,11 @@ related_documents:
 
 | 環境            | 用途                                                | プラットフォーム / 実行方式                                                                            | 所有者 | 更新・廃止方針                                                             |
 | :-------------- | :-------------------------------------------------- | :----------------------------------------------------------------------------------------------------- | :----- | :------------------------------------------------------------------------- |
-| ローカル開発    | 実装、単体テスト、設計書の作成                      | Windows（開発機）                                                                                      | 開発者 | ツールチェーンは `rust-toolchain.toml` と `uv.lock` に従う。               |
-| 計算機（Linux） | 実測（ベンチマーク）と、Rust のビルド、テストの反復 | 社内の Linux 計算機（KVM 仮想機、RHEL 8 系、Intel Core i5-1235U の2 vCPU）。Rust は、システムの 1.97.1 | xzyozi | 参考の基準機（OPEN-06）。仕様は docs/analysis/コア縦切り実装計画.md を参照 |
-| CI（Linux）     | 全品質ゲートの実行                                  | GitHub Actions（`ubuntu-latest`）                                                                      | xzyozi | ワークフローの更新はPRで行う。                                             |
-| CI（Windows）   | AC-07（OS間のハッシュ一致）、Windows でのビルド確認 | GitHub Actions（`windows-latest`）                                                                     | xzyozi | 同上。                                                                     |
+| ローカル開発    | 実装、単体テスト、設計書の作成                      | Windows / macOS（開発・検証機）                                                                        | 開発者 | ツールチェーンは `rust-toolchain.toml` と `uv.lock` に従う。               |
+| 基準実機（macOS） | `OPEN-06` 主基準実機（`NFR-03` 計測・検証）       | Apple M3（ARM64、物理8コア / 論理8コア、16 GB RAM、macOS 14.3 Build 23D2057）、Rust 1.97.1 (`rustup`) | xzyozi | 正式基準機（`OPEN-06`）。計測実績は `EK-TEST-001` 3章・`RUN-005` に記録  |
+| 計算機（Linux） | x86_64 実測・ビルド検証補助                         | 社内の Linux 計算機（KVM 仮想機、RHEL 8 系、Intel Core i5-1235U の2 vCPU）。Rust は、システムの 1.97.1 | xzyozi | 補助検証機。仕様は `docs/analysis/コア縦切り実装計画.md` を参照            |
+| CI（Linux）     | 全品質ゲート・`QG-008` x86_64 回帰ベンチ実行        | GitHub Actions（`ubuntu-latest`、x86_64）                                                              | xzyozi | ワークフローの更新はPRで行う。                                             |
+| CI（Windows）   | AC-07（OS間のハッシュ一致）、Windows でのビルド・FFI確認 | GitHub Actions（`windows-latest`、x86_64）                                                             | xzyozi | 同上。                                                                     |
 
 ## 4. 適用する環境要素
 
@@ -77,11 +80,11 @@ related_documents:
 - **リポジトリの構成**: Cargo ワークスペースとし、`core/`、`core-capi/`、`bindings/python/`、`adapters/` に分ける（EK-BD-001 2.1節）。禁止ルール（要件定義書 6章）は `core/` に適用する。
 - **成果物**: ネイティブ戦略用のバイナリとライブラリ、C ヘッダ（`core-capi`）、Python の wheel（`bindings/python`）。
 - **ビルド構成**: 性能の計測は `--release` と LTO を有効にする（要件定義書 8章）。境界を含むバイナリは `panic = "unwind"` とする（ADR-003 5.1-4）。
-- **未確定**: `abi3`（安定ABI）の wheel を使うかどうかは、ADR-003 のスパイクの結果で決める。
+- **`abi3`（安定ABI）の方針**: ADR-003 スパイク完了により、当面は `StrategyArenaView` / `EventBatchView` の標準バッファプロトコル（`Py_buffer`・`PyBuffer_FillInfo`）との互換性・安全性を優先して標準（非 `abi3`、ターゲット CPython ごとの wheel）ビルドを採用する。将来 `abi3-py311` 等へ移行する場合は互換性と性能を再評価する。
 
 ### 4.4 CI/CD・品質ゲート
 
-実行契機は、`main` と `develop` への push、およびこれらへの PR とする（既存の `ci-python.yml` と同じ）。Rust 用のワークフロー `ci-rust.yml` は未作成で、Rust のコードを追加する PR で作成する。`ci-rust.yml` は、PR と push で QG-001〜QG-007、QG-012、QG-013 を実行する。QG-008 と QG-009 は、定期実行（または手動）のワークフローで実行する。
+実行契機は、`main` と `develop` への push、およびこれらへの PR とする（既存の `ci-python.yml` と同じ）。Rust 用のワークフロー `.github/workflows/ci-rust.yml` は **QG-001〜QG-007・QG-012・QG-013**（`test` および `ffi-gates` は Ubuntu / Windows マトリクス）を実装済みである。定期・手動ゲートとして `.github/workflows/bench.yml`（**QG-008**）および `.github/workflows/miri.yml`（**QG-009**）、依存脆弱性検査として `.github/workflows/audit.yml`（`cargo audit`）を整備済みである。
 
 品質ゲートは次の表を正本とする。設計書とテスト文書は、ゲートIDで参照する。
 
@@ -89,7 +92,7 @@ related_documents:
 | :------- | :------------------------------------ | :--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | :------------------------------------------------ | :------------------------------------------------------------------------------------------------------------------------ |
 | QG-001   | Rust 整形                             | `cargo fmt --all --check`                                                                                                                                                                      | Rust のコードがあるとき。PR と push               | 差分なし                                                                                                                  |
 | QG-002   | Rust 静的解析                         | `cargo clippy --workspace --all-targets --locked -- -D warnings`。`core/` には追加の lint 設定を適用する（表の下の注を参照）                                                                   | 同上                                              | 警告ゼロ。禁止 lint の違反ゼロ（要件定義書 6章の自動検査）                                                                |
-| QG-003   | crate 属性検査                        | `core/` のクレートルートに `#![no_std]` と `#![forbid(unsafe_code)]` があることを検査するスクリプト（未作成）                                                                                  | 同上                                              | 両方の属性がある。`alloc` 以外の `std` 参照がない（ADR-004）                                                              |
+| QG-003   | crate 属性検査                        | `python3 .github/scripts/check_core_attrs.py`（`core/` のクレートルートに `#![no_std]` と `#![forbid(unsafe_code)]` があることを検査）                                                    | 同上                                              | 両方の属性がある。`alloc` 以外の `std` 参照がない（ADR-004）                                                              |
 | QG-004   | Rust テスト                           | `cargo test --workspace --locked`                                                                                                                                                              | 同上                                              | 全テスト合格                                                                                                              |
 | QG-005   | ゼロアロケーション（AC-05）           | カウンタ付きアロケータを使うテスト（`cargo test` に含める）                                                                                                                                    | `core/` の変更時                                  | AC-05 を満たす                                                                                                            |
 | QG-006   | 決定論性（AC-04、AC-07）              | 同一入力・同一シードで単一実行と16並列実行の出力ハッシュを比較するテスト。Linux と Windows の両方で実行する                                                                                    | `core/` と `adapters/` の変更時。CI のマトリクス  | AC-04 と AC-07 を満たす。比較対象は、最終状態、全出力ログ、トレースログ（NFR-01、NFR-05）                                 |
@@ -106,6 +109,7 @@ related_documents:
 - `unwrap_used`、`expect_used`、`indexing_slicing`（ホットパスでのパニック。要件定義書 6章3項、ADR-002）
 - `std::time::SystemTime` と `std::time::Instant`（`disallowed_types`。要件定義書 6章1項）
 - `std::collections::HashMap` と `HashSet`（`disallowed_types`。要件定義書 6章2項）
+- 注: `core/benches/` 配下のベンチマーク計測コードに限り、経過時間測定のため `#[allow(clippy::disallowed_types)]` で `std::time::Instant` の使用を例外許可している（`core/src/` には許可しない）。
 
 **ゲートの対象戦略**: AC-04 と AC-05 は、ネイティブ戦略を対象とする。Python 戦略は、要件定義書 7章でこの2つの対象外とされている。AC-07（OS間の一致）は、要件定義書 7章の既定どおり、ネイティブ戦略を対象とする。
 
@@ -122,7 +126,7 @@ related_documents:
 
 - **ロックファイル**: `Cargo.lock` と `uv.lock` をコミットする。Rust は `--locked` を付けてビルドとテストを実行する。
 - **ツールチェーンの固定**: `rust-toolchain.toml`、`.python-version`。
-- **公開直後のパッケージの回避**: Python は `uv` のグローバル設定（`exclude-newer`）に従う。Rust には同等の標準機能がないため、依存の追加と更新は PR で内容を確認する。依存の脆弱性検査ツール（`cargo audit` など）を使うかどうかは未確定とし、依存を追加する時点で決める。
+- **公開直後のパッケージの回避・脆弱性検査**: Python は `uv` のグローバル設定（`exclude-newer`）に従う。Rust は依存の追加と更新を PR で内容確認するとともに、`.github/workflows/audit.yml`（`cargo audit --deny warnings`）で脆弱性アドバイザリを定期・変更時検査する。
 - **決定論性に関わる設定**: ビルドの構成（最適化レベル、LTO）を変えた場合も、QG-006 の出力ハッシュが一致することを確認する。
 
 ## 5. 検証方法
@@ -138,24 +142,26 @@ related_documents:
 
 | ID     | 対象             | 標準との差異                  | 理由・制約                 | 影響                                                              | 代替対応                                        | 解除条件                     |
 | :----- | :--------------- | :---------------------------- | :------------------------- | :---------------------------------------------------------------- | :---------------------------------------------- | :--------------------------- |
-| EX-001 | ローカルの開発機 | Rust のツールチェーンが未導入 | 導入は依頼がある場合に限る | スパイク（V-01〜V-06）と Rust のゲートをローカルで実行できない    | CI で実行する。または導入後にローカルで実行する | 開発機へのツールチェーン導入 |
-| EX-002 | CI               | `ci-rust.yml` が未作成        | Rust のコードがまだない    | Rust のゲート（QG-001〜QG-009、QG-012、QG-013）が自動実行されない | Rust のコードを追加する最初の PR で作成する     | `ci-rust.yml` の追加         |
+| EX-001 | ローカルの開発機 | Rust のツールチェーンが未導入（または一部検証機） | 導入は依頼がある場合に限る | スパイク（V-01〜V-06）と Rust のゲートをローカルで実行できない環境がある | CI（`ci-rust.yml`）または Rust 導入済み計算機で実行する | 開発機へのツールチェーン導入 |
+| EX-002 | CI               | 【解除済み】境界層・定期ベンチ・Miri・脆弱性検査を整備済み | `ci-rust.yml`（QG-001〜007, 012, 013）・`bench.yml`（QG-008）・`miri.yml`（QG-009）・`audit.yml` がすべて整備済み | 差異なし | CI で自動・定期実行する（`OPEN-06` 正式基準機判定のみ別途 `#19` で確定） | 解除済み |
 
 ### 6.1 未確定事項
 
 | 項目                    | 内容                                                                                                                                                    | 決める時期・場所                 |
 | :---------------------- | :------------------------------------------------------------------------------------------------------------------------------------------------------ | :------------------------------- |
 | Rust のバージョン       | 【解決済み】1.97.1 に決定した（4.1節）。`rustup` がない計算機では、`rust-toolchain.toml` の固定が効かないため、版の一致は CI の固定とシステムの版で保つ | ツールチェーンの導入時           |
-| `abi3` の採否           | wheel を安定ABIで作るか（4.3節）                                                                                                                        | ADR-003 のスパイク後             |
-| 脆弱性検査ツール        | `cargo audit` などを使うか（4.6節）                                                                                                                     | 最初の依存を追加する時点         |
-| QG-003 の検査スクリプト | 未作成（4.4節）                                                                                                                                         | `core/` を作る PR                |
-| `core/clippy.toml`      | 禁止 lint の具体的な設定（4.4節の注）                                                                                                                   | `core/` を作る PR                |
-| 性能の基準機            | OPEN-06（2章）                                                                                                                                          | テスト計画の作成時               |
-| `ci-rust.yml`           | 未作成（EX-002）                                                                                                                                        | Rust のコードを追加する最初の PR |
+| `abi3` の採否           | 【解決済み】当面は非 `abi3`（標準 Python バージョン別 wheel）を採用（4.3節、ADR-003 5.2節）                                                            | ADR-003 スパイク完了（決定済み） |
+| 脆弱性検査ツール        | 【解決済み】`cargo audit` を `.github/workflows/audit.yml` へ導入済み（4.6節）                                                                          | 導入済み                         |
+| QG-003 の検査スクリプト | 【解決済み】`.github/scripts/check_core_attrs.py` として作成済み（4.4節）                                                                               | `core/` を作る PR（完了）        |
+| `core/clippy.toml`      | 【解決済み】作成し、`core/src/lib.rs` の `#![deny(...)]` と併せて運用中（4.4節の注）                                                                    | `core/` を作る PR（完了）        |
+| 性能の基準機            | 【解決済み】`OPEN-06` 確定（主基準実機: Apple M3 / macOS 14.3、x86_64 CI 回帰: `ubuntu-latest`）（2章、3章） | 確定済み（Issue #19）            |
+| `ci-rust.yml` / `miri.yml` / `bench.yml` | 【解決済み】`ci-rust.yml`（Ubuntu/Windows FFI含む）、`miri.yml`（QG-009）、`bench.yml`（QG-008）、`audit.yml` をすべて整備済み | 整備完了 |
 
 ## 7. 関連文書
 
 - **設計書**: [EK-BD-001 基本設計書](../design/EK-BD-001_基本設計書.md)
+- **環境構築手順書**: [EK-SETUP-001 環境構築手順書](./EK-SETUP-001_環境構築手順書.md)
+- **テスト計画・結果報告書**: [EK-TEST-001 テスト計画・結果報告書](../test/EK-TEST-001_テスト計画・結果報告書.md)
 - **要件**: [要件定義書](../features/deterministic-event-kernel-requirements.md)
 - **判断理由**: [ADR-002](../adr/002-core-language-rust.md)、[ADR-003](../adr/003-python-ffi-boundary.md)、[ADR-004](../adr/004-core-memory-allocation.md)
 - **Python 環境**: [python_setup.md](./python_setup.md)
@@ -168,7 +174,7 @@ related_documents:
 - [x] 品質ゲートのゲートID、実行方法、適用条件、合格基準を 4.4節に記載した。
 - [x] 検証方法と合格条件を記載した。
 - [x] 標準から外れる点を、理由、影響、代替対応、解除条件とともに記録した。
-- [ ] 環境構築手順書への参照を設定した（未作成）。
+- [x] 環境構築手順書への参照を設定した（[EK-SETUP-001](./EK-SETUP-001_環境構築手順書.md)）。
 - [x] 秘密情報や利用者固有の認証情報を記載していない。
 
 ## 9. 改訂履歴 (Change Log)
@@ -176,5 +182,9 @@ related_documents:
 | 版数    | 改訂日     | 変更者 | 変更内容・変更理由 (Why)                                                                                                                                                                                                                                                                                                                                                                                                                    |
 | :------ | :--------- | :----- | :------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | Rev.0.1 | 2026-11-24 | xzyozi | 初版ドラフト。BD Rev.0.4 と ADR-002、003、004 の後続作業（品質ゲートの登録）を反映した。                                                                                                                                                                                                                                                                                                                                                    |
+| Rev.0.2 | 2026-11-27 | xzyozi | `core/`（`QG-001`〜`QG-006`）の `ci-rust.yml`・`check_core_attrs.py`・`core/clippy.toml` 作成済み状況とベンチマークの `Instant` 例外、および `EK-SETUP-001` / `EK-TEST-001` 参照を反映した。                                                                                                                                                                                                                                                 |
 | Rev.0.2 | 2026-11-24 | xzyozi | レビュー指摘を反映。Rev.0.1 の「後続作業を反映した」は、品質ゲートの登録だけが対象で、Rust のバージョンと lint の具体的な設定は未確定だった。合格基準を AC-ID の参照にした。`cbindgen` と `maturin` のゲート（QG-012）、Python 側のビュー無効化のゲート（QG-013）を追加し、V-04 と V-06 を QG-007 に含めた。V-05 を Rust 側（Miri）と Python 側（pytest）に分けた。ゲートの対象戦略とCIの実行範囲を明確化し、未確定事項を 6.1節にまとめた。 |
-| Rev.0.3 | 2026-11-26 | xzyozi | 社内の Linux 計算機（Rust 1.97.1）を、実測用の環境として 3章に追加した。Rust のバージョンを 1.97.1 に決定した（4.1節、6.1節）。決定の経緯は docs/analysis/コア縦切り実装計画.md に記録した。                                                                                                                                                                                                                                                |
+| Rev.0.4 | 2026-11-27 | xzyozi | 社内の Linux 計算機追記を反映した環境基盤調整。                                                                                                                                                                                                                                                                                                                                                                                           |
+| Rev.0.5 | 2026-11-27 | xzyozi | ADR-003 承認に伴い `abi3` 採否（非 `abi3` 標準 wheel）を確定。`ci-rust.yml` への `QG-007`/`QG-012`/`QG-013` 追加および `miri.yml`（`QG-009`）追加を反映し、`EX-002`・6.1節を更新。 |
+| Rev.0.6 | 2026-11-28 | xzyozi | `bench.yml`（`QG-008`）・`audit.yml`（`cargo audit`）追加および `ci-rust.yml` `ffi-gates` の Ubuntu/Windows マトリクス拡張を反映し、`EX-002`・6.1節を解除済みに更新（Issue #18）。 |
+| Rev.1.0 | 2026-11-28 | xzyozi | `OPEN-06`（Apple M3 主基準実機 + `ubuntu-latest` x86_64 CI 回帰確認）確定に伴い 2章・3章・6.1節を更新し、`status` を `approved` へ更新（Issue #19 / #20）。 |
