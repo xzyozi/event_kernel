@@ -2,14 +2,17 @@
 
 決定論的リプレイと先読みバイアス（Look-ahead Bias）の構造的排除を両立させる、イベント駆動カーネル基盤です。
 
-- **リリース**: `v0.0.1`（`core/` 実装・検証済み、Python FFI 境界・アダプタ層は設計中）
-- **言語構成**: Rust コア（`core/`、`#![no_std]` + `#![forbid(unsafe_code)]` + 初期化時のみ `alloc`）および Python ホスト連携基盤（設計段階）
+- **リリース**: `v0.0.1`（`main`：`core/` 実装・検証済み、`develop`：`core-capi/`・`adapters/`・`bindings/python/` 実装および全品質ゲート整備完了）
+- **言語構成**: Rust コア（`core/`、`#![no_std]` + `#![forbid(unsafe_code)]` + 初期化時のみ `alloc`）、C ABI（`core-capi/`）、外部ポートアダプタ（`adapters/`）、Python ホスト連携（`bindings/python/`、PyO3 + Arrow PyCapsule）
 
 ## リポジトリ構成
 
-- `core/` (`event-kernel-core` / `ek_core`): カーネル本体（イベントループ、K-way マージ、履歴リングバッファ、アクションキュー、Xoshiro256++ PRNG、XXH3-64 / SHA-256 トレース、スナップショット保存・復元）と機能・ゼロアロケーション・決定論性テスト・ベンチマーク
+- `core/` (`event-kernel-core` / `ek_core`): カーネル本体（イベントループ、K-way マージ、履歴リングバッファ、アクションキュー、Xoshiro256++ PRNG、XXH3-64 / SHA-256 トレース、スナップショット保存・復元、`ViewLease`/`ViewGuard`）とテスト・ベンチマーク
+- `core-capi/` (`event-kernel-capi` / `ek_capi`): `cbindgen` 生成 C ヘッダ（`core-capi/include/event_kernel.h`）付き C ABI 境界層
+- `adapters/` (`event-kernel-adapters` / `ek_adapters`): Parquet / CSV / バイナリ / メモリフィード、原子ディスクスナップショット保存（`.eksnap`）、トレース永続化（`.ektrace`）、シミュレーション約定アダプタ
+- `bindings/python/` (`event_kernel._core`): PyO3 拡張、`StrategyContext` / ビュー寿命管理、Arrow PyCapsule（`__arrow_c_stream__`）、契約テスト
 - `docs/`: 要件定義、ADR、基本/詳細/データ構造/IF 設計書、環境仕様・構築手順書、テスト計画・結果報告書（SSOT 運用は [docs/README.md](docs/README.md) を参照）
-- `.github/`: Rust / Python / TypeScript / ドキュメント / Mermaid CI ワークフローと検証スクリプト
+- `.github/`: Rust / FFI（Ubuntu/Windows）/ Benchmark / Miri / Security Audit / Python / ドキュメント / Mermaid CI ワークフローと検証スクリプト
 
 ## 主要ドキュメント（正本インデックス）
 
@@ -23,7 +26,7 @@
 | データ構造 (DS) | [EK-DS-001_データ構造仕様書.md](docs/design/EK-DS-001_データ構造仕様書.md) | `EventHeader`・スナップショット/トレース形式・原子書き込み |
 | 外部 IF (IF) | [EK-IF-001_IF仕様書.md](docs/design/EK-IF-001_IF仕様書.md) | `core-capi` C ABI・`bindings/python` API・Arrow 出力契約 |
 | 環境仕様・手順 | [EK-ENV-001](docs/setup/EK-ENV-001_環境・開発基盤仕様書.md) / [EK-SETUP-001](docs/setup/EK-SETUP-001_環境構築手順書.md) | ツールチェーン・品質ゲート（`QG-001`〜`QG-014`）・構築手順 |
-| テスト計画・結果 | [EK-TEST-001_テスト計画・結果報告書.md](docs/test/EK-TEST-001_テスト計画・結果報告書.md) | 検証計画・`v0.0.1` 検証実績・未実施スパイク |
+| テスト計画・結果 | [EK-TEST-001_テスト計画・結果報告書.md](docs/test/EK-TEST-001_テスト計画・結果報告書.md) | 検証計画・`TC-001`〜`TC-026` 検証実績・ベンチ/Miri/FFI証跡 |
 | 実装計画・実測記録 | [コア縦切り実装計画.md](docs/analysis/コア縦切り実装計画.md) | `core/` 段階的実装の判断経緯とベンチマーク記録 |
 
 ## Rust から利用する（サブモジュール等）
@@ -55,14 +58,20 @@ event-kernel-core = { path = "external/event_kernel/core" }
 環境ごとの前提や詳細手順は [EK-SETUP-001](docs/setup/EK-SETUP-001_環境構築手順書.md) を参照してください。
 
 ```bash
-# Rust コア（QG-001〜QG-006）
+# Rust ワークスペース（QG-001〜QG-006）
 cargo fmt --all --check
 cargo clippy --workspace --all-targets --locked -- -D warnings
 python3 .github/scripts/check_core_attrs.py
 cargo test --workspace --locked
 
-# Python（QG-010）
-uv run --no-sync pytest
+# FFI 契約・C ヘッダ・wheel（QG-007, QG-012, QG-013）
+uv sync --extra dev --extra ffi --locked
+cargo build -p event-kernel-capi --locked
+uv run --no-sync maturin develop --manifest-path bindings/python/Cargo.toml --locked
+uv run --no-sync pytest bindings/python/tests -v
+
+# Python 品質（QG-010）
+uv run --no-sync ruff check . && uv run --no-sync ruff format --check . && uv run --no-sync mypy . && uv run --no-sync pytest
 
 # ドキュメント・Mermaid 検証（QG-011）
 python3 .github/scripts/validate_docs.py docs README.md
