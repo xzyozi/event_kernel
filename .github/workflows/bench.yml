@@ -1,0 +1,50 @@
+# 標準ベンチマーク定期実行ワークフロー（QG-008、EK-ENV-001 4.4節）。
+# PR の必須ゲートにはせず、定期・手動実行およびベンチ定義変更時に参考計測値を記録する。
+name: Rust Benchmark (QG-008)
+on:
+  schedule:
+    - cron: '0 4 * * 1'
+  workflow_dispatch:
+    inputs:
+      events:
+        description: 'EK_BENCH_EVENTS（既定: 10000000）'
+        required: false
+        default: '10000000'
+        type: string
+      runs:
+        description: 'EK_BENCH_RUNS（既定: 5、最小 3）'
+        required: false
+        default: '5'
+        type: string
+  pull_request:
+    branches: [ main, develop ]
+    paths:
+      - '.github/workflows/bench.yml'
+      - 'core/benches/**'
+permissions:
+  contents: read
+concurrency:
+  group: ci-bench-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+env:
+  CARGO_TERM_COLOR: always
+jobs:
+  bench:
+    name: Step Throughput Benchmark (QG-008)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      - name: Set up Python (for workspace PyO3 build metadata)
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install toolchain from rust-toolchain.toml
+        run: rustup toolchain install
+      - name: Run step_throughput benchmark
+        shell: bash
+        env:
+          EK_BENCH_EVENTS: ${{ inputs.events || '10000000' }}
+          EK_BENCH_RUNS: ${{ inputs.runs || '5' }}
+        run: cargo bench --locked -p event-kernel-core --bench step_throughput

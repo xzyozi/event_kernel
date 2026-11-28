@@ -1,5 +1,5 @@
 # Rust の品質ゲート（EK-ENV-001 4.4節）。QG-001〜QG-007、QG-012、QG-013 を実行する。
-# QG-008（Bench）および QG-009（Miri）は定期実行ワークフローで別に置く。
+# QG-008（Bench）および QG-009（Miri）は別ワークフローで実行する。
 name: Rust CI
 on:
   push:
@@ -58,9 +58,13 @@ jobs:
         run: cargo test --workspace --locked
 
   ffi-gates:
-    name: FFI Contract, Header & Wheel (QG-007, QG-012, QG-013)
-    runs-on: ubuntu-latest
+    name: FFI Contract, Header & Wheel (QG-007, QG-012, QG-013) on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
     timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ ubuntu-latest, windows-latest ]
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -70,12 +74,6 @@ jobs:
         uses: taiki-e/install-action@v2
         with:
           tool: cbindgen@0.29.4
-      - name: QG-012 C header diff and C syntax check
-        shell: bash
-        run: |
-          cbindgen --config core-capi/cbindgen.toml --crate event-kernel-capi --output /tmp/event_kernel.h
-          diff -u core-capi/include/event_kernel.h /tmp/event_kernel.h
-          printf '#include "core-capi/include/event_kernel.h"\nint main(void){return 0;}\n' | cc -I. -x c -fsyntax-only -Wall -Wextra -Werror -
       - name: Install uv
         uses: astral-sh/setup-uv@v5
         with:
@@ -84,13 +82,31 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: '3.12'
+      - name: QG-012 C header diff check
+        shell: bash
+        run: |
+          gen_header="${RUNNER_TEMP}/event_kernel.h"
+          cbindgen --config core-capi/cbindgen.toml --crate event-kernel-capi --output "$gen_header"
+          python -c '
+          import pathlib, sys
+          committed = pathlib.Path("core-capi/include/event_kernel.h").read_text(encoding="utf-8").replace("\r\n", "\n")
+          generated = pathlib.Path(sys.argv[1]).read_text(encoding="utf-8").replace("\r\n", "\n")
+          assert committed == generated, "cbindgen header differs from core-capi/include/event_kernel.h"
+          ' "$gen_header"
+      - name: QG-012 C header syntax check (Linux cc)
+        if: runner.os == 'Linux'
+        shell: bash
+        run: printf '#include "core-capi/include/event_kernel.h"\nint main(void){return 0;}\n' | cc -I. -x c -fsyntax-only -Wall -Wextra -Werror -
       - name: Sync FFI test dependencies
+        shell: bash
         run: uv sync --extra dev --extra ffi --locked
       - name: Build C ABI shared library and Python wheel (QG-012)
+        shell: bash
         run: |
           cargo build -p event-kernel-capi --locked
           uv run --no-sync maturin build --manifest-path bindings/python/Cargo.toml --locked --out dist
           uv run --no-sync maturin develop --manifest-path bindings/python/Cargo.toml --locked
           uv run --no-sync python -c "import event_kernel as ek; print(ek.__all__)"
       - name: Run FFI parity, Arrow PyCapsule, panic recovery, and ViewGuard tests (QG-007, QG-013)
+        shell: bash
         run: uv run --no-sync pytest bindings/python/tests -v
